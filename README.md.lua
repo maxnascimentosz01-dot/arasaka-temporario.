@@ -1002,7 +1002,11 @@ function Utils.FormatNumber(n, kDecimals)
     elseif absN >= 1e9 then return string.format("%.2fB", n / 1e9)
     elseif absN >= 1e6 then return string.format("%.2fM", n / 1e6)
     elseif absN >= 1e3 then
-        return string.format(kDecimals == 2 and "%.2fK" or "%.1fK", n / 1e3)
+    local fmt = "%.1fK"
+    if kDecimals == 2 then
+        fmt = "%.2fK"
+    end
+    return string.format(fmt, n / 1e3)
     else
         return tostring(math.floor(n + 0.5))
     end
