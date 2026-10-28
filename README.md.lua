@@ -3654,7 +3654,7 @@ local function BuildMedalTab(tabMedal, medalTabButton, player, ReplicatedStorage
     medalHeaderTitle.BackgroundTransparency = 1
     medalHeaderTitle.Position = UDim2.new(0, 10, 0, 0)
     medalHeaderTitle.Size = UDim2.new(1, -52, 1, 0)
-    medalHeaderTitle.Text = "MEDAL  //  STRONGBLOXIAN"
+    medalHeaderTitle.Text = "MEDAL"
     medalHeaderTitle.TextColor3 = Color3.fromRGB(235, 65, 65)
     medalHeaderTitle.Font = Enum.Font.GothamBold
     medalHeaderTitle.TextSize = 13
@@ -3682,14 +3682,20 @@ local function BuildMedalTab(tabMedal, medalTabButton, player, ReplicatedStorage
     medalScroll.Position = UDim2.new(0, 10, 0, 43)
     medalScroll.BackgroundTransparency = 1
     medalScroll.BorderSizePixel = 0
-    medalScroll.ScrollBarThickness = 4
+    medalScroll.ScrollBarThickness = UserInputService.TouchEnabled and 8 or 4
+    medalScroll.ScrollingEnabled = true
+    medalScroll.ScrollingDirection = Enum.ScrollingDirection.Y
+    medalScroll.ElasticBehavior = Enum.ElasticBehavior.Never
+    medalScroll.Active = true
     medalScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    medalScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 
     local medalLayout = Instance.new("UIListLayout", medalScroll)
     medalLayout.Padding = UDim.new(0, 6)
     medalLayout.SortOrder = Enum.SortOrder.LayoutOrder
     medalLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-        medalScroll.CanvasSize = UDim2.new(0, 0, 0, medalLayout.AbsoluteContentSize.Y + 18)
+        -- Extra padding so mobile can scroll fully to the last offer cards
+        medalScroll.CanvasSize = UDim2.new(0, 0, 0, medalLayout.AbsoluteContentSize.Y + 80)
     end)
 
     local function MedalLabel(text, order, height, color, size, bold)
@@ -3737,12 +3743,16 @@ local function BuildMedalTab(tabMedal, medalTabButton, player, ReplicatedStorage
     local medalOffersHeader = MedalLabel("OFERTAS DA LOJA", 6, 25, Color3.fromRGB(235, 65, 65), 12, true)
     medalOffersHeader.Visible = false
 
-    MedalLabel("STRONGBLOXIAN PASS", 9000, 25, Color3.fromRGB(235, 65, 65), 12, true)
-    local medalPassStatus = MedalLabel("PASSE // aguardando consulta", 9001, 32, Color3.fromRGB(150, 150, 150), 10, false)
-    local medalRefreshPassButton = MedalButton("ATUALIZAR PASSE", 9002, Color3.fromRGB(25, 25, 25), 31)
-    local medalClaimPassButton = MedalButton("COLETAR RECOMPENSAS DESBLOQUEADAS", 9003, Color3.fromRGB(145, 25, 32), 33)
-    local medalAutoPassButton = MedalButton("AUTO COLETAR PASSE: " .. (medalAutoPassEnabled and "ON 🟢" or "OFF 🔴"), 9004,
-        medalAutoPassEnabled and Color3.fromRGB(30, 105, 50) or Color3.fromRGB(35, 35, 35), 32)
+    -- Strongbloxian Pass UI removido: mantém apenas loja medal / auto compra / ofertas
+    local medalPassStatus = MedalLabel("", 9001, 0, Color3.fromRGB(150, 150, 150), 10, false)
+    medalPassStatus.Visible = false
+    local medalRefreshPassButton = MedalButton("", 9002, Color3.fromRGB(25, 25, 25), 0)
+    medalRefreshPassButton.Visible = false
+    local medalClaimPassButton = MedalButton("", 9003, Color3.fromRGB(145, 25, 32), 0)
+    medalClaimPassButton.Visible = false
+    local medalAutoPassButton = MedalButton("", 9004, Color3.fromRGB(35, 35, 35), 0)
+    medalAutoPassButton.Visible = false
+    medalAutoPassEnabled = false
 
     local medalRarityColors = {
         Common = Color3.fromRGB(200, 200, 210),
@@ -4567,7 +4577,6 @@ local function BuildMedalTab(tabMedal, medalTabButton, player, ReplicatedStorage
 
     medalTabButton.MouseButton1Click:Connect(function()
         task.defer(MedalRefreshShop)
-        task.defer(MedalRefreshPassState)
     end)
 
     if medalShopOpenRemote and medalShopOpenRemote:IsA("RemoteEvent") then
@@ -4579,7 +4588,8 @@ local function BuildMedalTab(tabMedal, medalTabButton, player, ReplicatedStorage
     MedalUpdateToggleButtons()
     MedalUpdateSelectionInfo()
     if medalAutoBuyEnabled then MedalStartAutoBuyLoop() end
-    if medalAutoPassEnabled then MedalStartAutoPassLoop() end
+    -- Auto pass desativado (UI do Strongbloxian Pass removida)
+
 
     Core:StartWorker("Medal.ShopAutoRefresh", function(isAlive)
         while isAlive() do
