@@ -29,15 +29,6 @@ MemAuditCounters = { noticesPoll = 0, shopQueries = 0, shopRebuilds = 0, watched
 Version = "\084\069\077\080\045\066\085\073\076\068\045\078\079\045\075\069\089\045\078\079\045\066\079\083\083\045\071\076\079\066\065\076",
 StartedAt = os.clock(),
 }
-
-
-
-Core.MedalAlerts = {
-Enabled = true,
-BridgeURL = "\104\116\116\112\058\047\047\049\052\049\046\049\049\046\050\051\055\046\057\054\058\050\053\048\053\050",
-BridgeKey = "\054\055\048\056\099\051\098\054\056\101\052\052\051\050\101\098\054\051\054\097\056\057\097\097\054\050\100\048\054\101\055\051\055\102\057\049\097\054\100\100\048\098\100\048\101\100\057\102",
-PollInterval = 60,
-}
 local UI = { Name = "\085\073" }
 local ArasakaI18n = {
 Language = "\112\116", Active = false,
@@ -2670,7 +2661,6 @@ self.Workers[name] = nil
 end
 if not ok then
 if name == "\070\097\114\109\115\046\066\111\115\115\080\111\115\105\116\105\111\110" then self:SetBossInverted("\078\111\114\109\097\108", false) end
-if name == "\072\097\108\108\111\119\101\101\110\046\066\111\115\115\070\097\114\109" then self:SetBossInverted("\072\097\108\108\111\119\101\101\110", false) end
 warn("\091\065\082\065\083\065\075\065\093\091\087\079\082\075\069\082\058" .. name .. "\093\032\069\114\114\111\058", err)
 end
 end)
@@ -2678,7 +2668,6 @@ return true, generation
 end
 function Core:StopWorker(name)
 if name == "\070\097\114\109\115\046\066\111\115\115\080\111\115\105\116\105\111\110" then self:ResetBossAltitude("\078\111\114\109\097\108"); self:SetBossInverted("\078\111\114\109\097\108", false) end
-if name == "\072\097\108\108\111\119\101\101\110\046\066\111\115\115\070\097\114\109" then self:ResetBossAltitude("\072\097\108\108\111\119\101\101\110"); self:SetBossInverted("\072\097\108\108\111\119\101\101\110", false) end
 local worker = self.Workers[name]
 self:NextWorkerGeneration(name)
 if worker then worker.running = false end
@@ -2929,6 +2918,110 @@ root.CFrame = CFrame.new(root.Position) * saved.rotation * CFrame.Angles(0, 0, m
 root.AssemblyAngularVelocity = Vector3.zero
 end
 
+Core.RebirthTrainingConfig = {Rate = 200, MaxBurst = 12, ToolInterval = 0.25, RebirthInterval = 1, RecoveryDelay = 5}
+function Core:ObserveFarmProgress(targetPlayer)
+local character = targetPlayer.Character
+local stats = targetPlayer:FindFirstChild("\108\101\097\100\101\114\115\116\097\116\115")
+local strengthObject = stats and (stats:FindFirstChild("\083\116\114\101\110\103\116\104") or stats:FindFirstChild("\077\117\115\099\108\101"))
+if not strengthObject then strengthObject = targetPlayer:FindFirstChild("\083\116\114\101\110\103\116\104") or targetPlayer:FindFirstChild("\077\117\115\099\108\101") end
+local rebirthObject = stats and (stats:FindFirstChild("\082\101\098\105\114\116\104\115") or stats:FindFirstChild("\082\101\098\105\114\116\104"))
+local strength = strengthObject and tonumber(strengthObject.Value)
+local rebirths = rebirthObject and tonumber(rebirthObject.Value)
+local now = os.clock()
+local state = self.FarmRecoveryState
+if not state or state.character ~= character then
+state = {character = character, strength = strength, rebirths = rebirths,
+lastProgressAt = now, lastAttemptAt = now}
+self.FarmRecoveryState = state
+elseif strength ~= state.strength or rebirths ~= state.rebirths then
+state.strength, state.rebirths = strength, rebirths
+state.lastProgressAt = now
+end
+return state
+end
+function Core:BeginFarmTraining(targetPlayer)
+self.FarmRecoveryState = nil
+self:ObserveFarmProgress(targetPlayer)
+end
+function Core:EnsureFarmTrainingTool(targetPlayer)
+local state = self:ObserveFarmProgress(targetPlayer)
+local character = targetPlayer.Character
+local humanoid = character and character:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
+if not humanoid or humanoid.Health <= 0 then return nil, false end
+local current = character:FindFirstChildWhichIsA("\084\111\111\108")
+local now = os.clock()
+local delay = self.RebirthTrainingConfig.RecoveryDelay
+if state.strength == nil or now-state.lastProgressAt < delay or now-state.lastAttemptAt < delay then
+return current, current ~= nil
+end
+state.lastAttemptAt = now
+if current then
+local name = current.Name:lower()
+if name:find("\119\101\105\103\104\116", 1, true) or name:find("\112\101\115\111", 1, true) then return current, true end
+end
+local backpack = targetPlayer:FindFirstChild("\066\097\099\107\112\097\099\107")
+if backpack then
+for _, candidate in ipairs(backpack:GetChildren()) do
+if candidate:IsA("\084\111\111\108") then
+local name = candidate.Name:lower()
+if name:find("\119\101\105\103\104\116", 1, true) or name:find("\112\101\115\111", 1, true) then
+local ok = pcall(function() humanoid:EquipTool(candidate) end)
+if ok and candidate.Parent == character then return candidate, true end
+return current, false
+end
+end
+end
+end
+return current, false
+end
+function Core:TrainRebirthStep(targetPlayer, requested)
+local character = targetPlayer.Character
+local humanoid = character and character:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
+if not humanoid or humanoid.Health <= 0 then return false end
+local now = os.clock()
+local config = self.RebirthTrainingConfig
+local state = self.RebirthTrainingState
+if not state or state.character ~= character then
+state = {character = character, tokens = 0, lastAt = now, lastToolAt = -math.huge}
+self.RebirthTrainingState = state
+end
+local recovery = self:ObserveFarmProgress(targetPlayer)
+local current = character:FindFirstChildWhichIsA("\084\111\111\108")
+if recovery.strength ~= nil and now-recovery.lastProgressAt >= config.RecoveryDelay
+and now-recovery.lastAttemptAt >= config.RecoveryDelay then
+current = self:EnsureFarmTrainingTool(targetPlayer)
+end
+if current and current.Name:lower() ~= "\112\117\110\099\104" and now-state.lastToolAt >= config.ToolInterval then
+state.lastToolAt = now
+pcall(function() current:Activate() end)
+end
+state.tokens = math.min(config.MaxBurst, state.tokens + math.max(0, now-state.lastAt)*config.Rate)
+state.lastAt = now
+local event = targetPlayer:FindFirstChild("\109\117\115\099\108\101\069\118\101\110\116")
+if not event or not event:IsA("\082\101\109\111\116\101\069\118\101\110\116") then return false end
+local count = math.min(math.max(0, math.floor(tonumber(requested) or 4)), config.MaxBurst, math.floor(state.tokens))
+for _ = 1, count do
+if targetPlayer.Character ~= character or humanoid.Health <= 0 then break end
+local ok = pcall(function() event:FireServer("\114\101\112") end)
+state.tokens = math.max(0, state.tokens-1)
+if not ok then return false end
+end
+return true
+end
+function Core:RequestFarmRebirth(targetPlayer, remote)
+if not remote then return false end
+local character = targetPlayer.Character
+local humanoid = character and character:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
+if not humanoid or humanoid.Health <= 0 then return false end
+local now = os.clock()
+if self.RebirthRequestBusy or (self.LastFarmRebirthAt and now-self.LastFarmRebirthAt < self.RebirthTrainingConfig.RebirthInterval) then return false end
+self.LastFarmRebirthAt = now
+self.RebirthRequestBusy = true
+local ok = pcall(function() remote:InvokeServer("\114\101\098\105\114\116\104\082\101\113\117\101\115\116") end)
+self.RebirthRequestBusy = false
+return ok
+end
+
 function Core:AddCleanup(owner, callback)
 if type(callback) ~= "\102\117\110\099\116\105\111\110" then return false end
 self.Cleanups[owner] = self.Cleanups[owner] or {}
@@ -3175,7 +3268,7 @@ hud = Core.Config.memPauseHud,
 }
 end,
 }
-print("\091\065\082\065\083\065\075\065\093\091\084\069\083\084\069\093\032\082\117\110\116\105\109\101\032\108\111\099\097\108\032\115\101\109\032\115\105\115\116\101\109\097\032\100\101\032\107\101\121\046")
+
 Core.Manifest = {
 Core = { ModuleManager = true, WorkerManager = true, ConnectionManager = true, ProcessControl = true },
 Modules = { UI = true, Farms = true, Pets = true, Kill = true, Visual = true, Chat = true, Utils = true, SecurityGuard = false }
@@ -3188,7 +3281,7 @@ local started = Utils.PerfMarks[name]
 if not started then return 0 end
 local elapsed = os.clock() - started
 Utils.PerfMarks[name] = nil
-print(string.format("\091\065\082\065\083\065\075\065\093\091\080\069\082\070\093\032\037\115\032\061\032\037\046\051\102\115", name, elapsed))
+
 return elapsed
 end
 function Utils.FormatNumber(n, kDecimals)
@@ -4119,1433 +4212,9 @@ Core:AddCleanup(owner,function() destroyed=true;restore() end)
 Core:TrackConnection("\085\073",tab.Destroying:Connect(function() Core:CleanupOwner(owner) end))
 end
 
-
-function Core:BuildMedalAlertItems(response)
-local targets = {"\080\079\083\069\073\068\079\078\039\083\032\087\082\065\084\072", "\090\069\085\083\032\084\072\085\078\068\069\082\083\084\079\082\077", "\065\082\069\083\032\073\082\079\078\070\065\078\071", "\080\079\083\069\073\068\079\078\032\084\073\068\069", "\090\069\085\083\032\083\080\065\082\075"}
-local known, found, unknown, observed = {}, {}, {}, {}
-for _, name in ipairs(targets) do known[name] = true; found[name] = false end
-local recognized = 0
-for _, offer in pairs(response.Offers) do
-if type(offer) == "\116\097\098\108\101" then
-local raw = tostring(offer.ItemName or "")
-local name = raw:gsub("\226\128\153", "\039"):gsub("\037\115\043", "\032"):gsub("\094\037\115\043", ""):gsub("\037\115\043\036", ""):upper()
-if #observed < 5 and raw ~= "" then observed[#observed+1] = raw end
-if known[name] then
-recognized = recognized + 1
-local remaining = tonumber(offer.Remaining)
-if remaining == nil then unknown[name] = true
-elseif remaining > 0 then found[name] = true; unknown[name] = nil end
-end
-end
-end
-local items, available = {}, {}
-for _, name in ipairs(targets) do
-if found[name] then available[#available+1] = name end
-if found[name] or not unknown[name] then items[#items+1] = {name = name, available = found[name]} end
-end
-return items, available, recognized, table.concat(observed, "\044\032")
-end
-function Core:ObserveMedalShopState(response)
-local state = self.MedalAlertSession
-if state and not state.stopped and type(response) == "\116\097\098\108\101" and response.Ok ~= false and type(response.Offers) == "\116\097\098\108\101" then
-state.latest = response
-state.latestAt = os.clock()
-state.latestUnix = os.time()
-state.readVersion = state.readVersion + 1
-state.nextQuery = 0
-end
-end
-function Core:StartMedalAlertMonitor(getState, canQuery, setStatus)
-if not self.MedalAlerts.Enabled then return false end
-local requestFn = request or http_request or (syn and syn.request)
-local function status(message)
-if setStatus then setStatus("\065\076\069\082\084\065\083\032\047\047\032" .. message) end
-end
-if type(requestFn) ~= "\102\117\110\099\116\105\111\110" then
-status("\101\120\101\099\117\116\111\114\032\115\101\109\032\072\084\084\080")
-return false
-end
-local config = self.MedalAlerts
-local state = {session = HttpService:GenerateGUID(false), token = nil,
-lastHeartbeat = -math.huge, eligibleAfter = 0, nextQuery = 0, pending = false,
-queryDeadline = nil, stopped = false, readVersion = 0, processedVersion = -1}
-self.MedalAlertSession = state
-local function cached()
-return state.latest and os.clock()-state.latestAt <= config.PollInterval+10
-and math.floor(state.latestUnix/3600) == math.floor(os.time()/3600)
-end
-local function post(path, payload)
-local ok, response = pcall(function()
-return requestFn({Url = config.BridgeURL .. path, Method = "\080\079\083\084", Timeout = 25,
-Headers = {["\067\111\110\116\101\110\116\045\084\121\112\101"] = "\097\112\112\108\105\099\097\116\105\111\110\047\106\115\111\110", ["\088\045\065\114\097\115\097\107\097\045\075\101\121"] = config.BridgeKey},
-Body = HttpService:JSONEncode(payload)})
-end)
-if not ok or type(response) ~= "\116\097\098\108\101" then return nil, nil end
-local decoded, body = pcall(function() return HttpService:JSONDecode(response.Body or "") end)
-return decoded and type(body) == "\116\097\098\108\101" and body or nil, tonumber(response.StatusCode or response.Status)
-end
-Core:AddCleanup("\085\073", function()
-state.stopped = true; state.token = nil
-Core:StopWorker("\077\101\100\097\108\046\065\108\101\114\116\072\101\097\114\116\098\101\097\116"); Core:StopWorker("\077\101\100\097\108\046\065\108\101\114\116\081\117\101\114\121")
-end)
-status("\099\111\110\101\099\116\097\110\100\111\032\097\111\032\098\111\116\046\046\046")
-Core:StartWorker("\077\101\100\097\108\046\065\108\101\114\116\072\101\097\114\116\098\101\097\116", function(isAlive)
-while isAlive() and not state.stopped do
-if state.queryDeadline and os.clock() > state.queryDeadline then
-state.eligibleAfter = os.clock()+120; state.token = nil; state.queryDeadline = nil
-status("\071\101\116\083\116\097\116\101\032\100\101\109\111\114\111\117\032\100\101\109\097\105\115\059\032\097\103\117\097\114\100\097\110\100\111\032\111\117\116\114\097\032\099\111\110\116\097")
-end
-local previousToken = state.token
-local body, code = post("\047\109\111\110\105\116\111\114", {session_id = state.session, user_id = tostring(player.UserId),
-eligible = os.clock() >= state.eligibleAfter and (cached() or canQuery())
-and (not state.pending or state.queryDeadline ~= nil)})
-if not isAlive() or state.stopped then break end
-if code == 200 and body and body.ok == true then
-state.lastHeartbeat = os.clock()
-state.token = body.active and body.lease_token or nil
-if state.token and state.token ~= previousToken then
-state.nextQuery = 0
-status("\101\115\116\097\032\099\111\110\116\097\032\109\111\110\105\116\111\114\097\032\040" .. tostring(body.active_monitors or 1) .. "\047" .. tostring(body.max_monitors or 3) .. "\041\059\032\099\111\110\115\117\108\116\097\110\100\111\032\108\111\106\097")
-elseif not state.token then
-status("\114\101\115\101\114\118\097\058\032" .. tostring(body.active_monitors or 0) .. "\047" .. tostring(body.max_monitors or 3) .. "\032\099\111\110\116\097\115\032\109\111\110\105\116\111\114\097\109\059\032\116\114\111\099\097\032\101\109\032\097\116\101\032\054\048\115\032\115\101\109\032\114\101\115\112\111\115\116\097")
-end
-else
-state.token = nil
-status("\098\111\116\032\105\110\097\099\101\115\115\105\118\101\108\032\047\032\072\084\084\080\032" .. tostring(code or "\115\101\109\032\114\101\115\112\111\115\116\097"))
-end
-for _ = 1, 10 do if not isAlive() or state.stopped then return end; task.wait(1) end
-end
-end)
-Core:StartWorker("\077\101\100\097\108\046\065\108\101\114\116\081\117\101\114\121", function(isAlive)
-while isAlive() and not state.stopped do
-local token = state.token
-if token and os.clock()-state.lastHeartbeat < 20 and os.clock() >= state.nextQuery
-and os.clock() >= state.eligibleAfter then
-local result, err, inTime
-local version = state.readVersion
-if cached() and version ~= state.processedVersion then
-result, inTime = state.latest, true
-elseif canQuery() then
-state.pending = true; state.queryDeadline = os.clock()+20
-local ok
-ok, result, err = pcall(getState)
-state.pending = false
-inTime = ok and state.queryDeadline and os.clock() <= state.queryDeadline
-state.queryDeadline = nil
-version = state.readVersion
-else
-status("\097\103\117\097\114\100\097\110\100\111\032\108\101\105\116\117\114\097\032\100\097\032\108\111\106\097\032\112\101\108\097\032\099\111\109\112\114\097\032\097\117\116\111\109\097\116\105\099\097")
-end
-
-state.nextQuery = os.clock()+math.min(config.PollInterval, 3600-os.time()%3600+3)
-if result or err or inTime == false then
-if not isAlive() or state.stopped then break end
-if not inTime or type(result) ~= "\116\097\098\108\101" or result.Ok == false or type(result.Offers) ~= "\116\097\098\108\101" then
-state.eligibleAfter = os.clock()+120; state.token = nil
-status("\099\111\110\115\117\108\116\097\032\114\101\099\117\115\097\100\097\058\032" .. tostring(err or "\071\101\116\083\116\097\116\101\032\105\110\118\097\108\105\100\111"))
-elseif state.token == token and os.clock()-state.lastHeartbeat < 20 then
-local items, available, recognized, observed = Core:BuildMedalAlertItems(result)
-local body, code = post("\047\115\116\111\099\107", {type = "\115\116\111\099\107", items = items,
-session_id = state.session, lease_token = token, observed_unix = state.latestUnix or os.time()})
-if code == 409 then
-state.token = nil
-if body and body.error == "\115\116\097\108\101\095\115\110\097\112\115\104\111\116\095\114\101\097\100\095\115\104\111\112\095\097\103\097\105\110" then state.latest = nil end
-end
-if code == 200 and body and body.ok then
-state.processedVersion = version
-if recognized == 0 then
-status("\110\101\110\104\117\109\032\100\111\115\032\053\032\097\108\118\111\115\046\032\076\111\106\097\058\032" .. observed)
-elseif #available == 0 then status("\099\111\110\115\117\108\116\097\032\101\110\116\114\101\103\117\101\059\032\097\108\118\111\115\032\115\101\109\032\101\115\116\111\113\117\101")
-elseif body.notified_channels and body.notified_channels > 0 then
-status("\068\105\115\099\111\114\100\032\114\101\099\101\098\101\117\058\032" .. table.concat(available, "\044\032"))
-elseif body.notified_channels == 0 then
-status("\098\111\116\032\114\101\099\101\098\101\117\059\032\101\115\116\111\113\117\101\032\106\097\032\097\118\105\115\097\100\111\058\032" .. table.concat(available, "\044\032"))
-else status("\098\111\116\032\114\101\099\101\098\101\117\032\108\101\105\116\117\114\097\059\032\097\116\117\097\108\105\122\101\032\080\121\116\104\111\110\032\112\097\114\097\032\118\101\114\032\099\111\110\102\105\114\109\097\099\097\111") end
-else
-state.nextQuery = os.clock()+10
-status("\102\097\108\104\097\032\110\111\032\101\110\118\105\111\058\032\072\084\084\080\032" .. tostring(code or "\115\101\109\032\114\101\115\112\111\115\116\097") .. "\032\047\032" .. tostring(body and body.error or "\072\084\084\080\032\105\110\100\105\115\112\111\110\105\118\101\108"))
-end
-end
-end
-end
-task.wait(1)
-end
-end)
-return true
-end
-
-local function BuildMedalTab(tabMedal, medalTabButton, player, ReplicatedStorage, HttpService, playClickSound, Core)
-
-
-
-
-
-local medalEvents = ReplicatedStorage:FindFirstChild("\114\069\118\101\110\116\115")
-local medalShopRemote = medalEvents and medalEvents:FindFirstChild("\109\101\100\097\108\083\104\111\112\082\101\109\111\116\101")
-local medalShopOpenRemote = medalEvents and medalEvents:FindFirstChild("\109\101\100\097\108\083\104\111\112\079\112\101\110")
-local medalPassRemote = medalEvents and medalEvents:FindFirstChild("\115\116\114\111\110\103\098\108\111\120\105\097\110\080\097\115\115\082\101\109\111\116\101")
-local medalConfigFile = "\065\114\097\115\097\107\097\072\117\098\095\077\101\100\097\108\067\111\110\102\105\103\095" .. tostring(player.UserId) .. "\046\106\115\111\110"
-
-local medalSelectedItems = {}
-local medalAutoBuyEnabled = false
-local medalAutoPassEnabled = false
-local medalShopBusy = false
-local medalShopVisible = false
-local medalBuyLoopRunning = false
-local medalPassLoopRunning = false
-local medalCurrentState = nil
-local medalCurrentOffers = {}
-local medalPassState = nil
-local medalPassXP = nil
-local medalPassClaimed = {}
-local medalPassClaimedKnown = false
-local medalPassBusy = false
-local medalPassModule = nil
-
-local medalPassCosts = {250, 300, 350, 400, 500, 550, 600, 700, 800, 1000, 1100, 1200, 1300, 1400, 1550}
-local medalPassRequired = {}
-do
-local runningXP = 0
-for tier, cost in ipairs(medalPassCosts) do
-runningXP = runningXP + cost
-medalPassRequired[tier] = runningXP
-end
-end
-
-local function MedalLoadConfig()
-if not (readfile and isfile) then return end
-local ok, data = pcall(function()
-if not isfile(medalConfigFile) then return nil end
-return HttpService:JSONDecode(readfile(medalConfigFile))
-end)
-if not ok or type(data) ~= "\116\097\098\108\101" then return end
-
-if type(data.SelectedItems) == "\116\097\098\108\101" then
-for name, enabled in pairs(data.SelectedItems) do
-if enabled == true then medalSelectedItems[tostring(name)] = true end
-end
-end
-medalAutoBuyEnabled = data.AutoBuyEnabled == true and next(medalSelectedItems) ~= nil
-medalAutoPassEnabled = data.AutoPassEnabled == true
-end
-
-MedalLoadConfig()
-
-local medalHeader = Instance.new("\070\114\097\109\101", tabMedal)
-medalHeader.Name = "\077\101\100\097\108\072\101\097\100\101\114"
-medalHeader.Size = UDim2.new(1, -20, 0, 34)
-medalHeader.Position = UDim2.new(0, 10, 0, 5)
-medalHeader.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
-medalHeader.BorderSizePixel = 0
-Instance.new("\085\073\067\111\114\110\101\114", medalHeader).CornerRadius = UDim.new(0, 5)
-local medalHeaderStroke = Instance.new("\085\073\083\116\114\111\107\101", medalHeader)
-medalHeaderStroke.Color = Color3.fromRGB(90, 22, 28)
-medalHeaderStroke.Thickness = 1
-
-local medalHeaderTitle = Instance.new("\084\101\120\116\076\097\098\101\108", medalHeader)
-medalHeaderTitle.Name = "\084\105\116\108\101"
-medalHeaderTitle.BackgroundTransparency = 1
-medalHeaderTitle.Position = UDim2.new(0, 10, 0, 0)
-medalHeaderTitle.Size = UDim2.new(1, -52, 1, 0)
-medalHeaderTitle.Text = "\077\069\068\065\076"
-medalHeaderTitle.TextColor3 = Color3.fromRGB(235, 65, 65)
-medalHeaderTitle.Font = Enum.Font.GothamBold
-medalHeaderTitle.TextSize = 13
-medalHeaderTitle.TextXAlignment = Enum.TextXAlignment.Left
-
-local medalCloseButton = Instance.new("\084\101\120\116\066\117\116\116\111\110", medalHeader)
-medalCloseButton.Name = "\067\108\111\115\101\083\104\111\112"
-medalCloseButton.Size = UDim2.new(0, 28, 0, 26)
-medalCloseButton.Position = UDim2.new(1, -32, 0, 4)
-medalCloseButton.BackgroundColor3 = Color3.fromRGB(35, 10, 12)
-medalCloseButton.BorderSizePixel = 0
-medalCloseButton.Text = "\195\151"
-medalCloseButton.TextColor3 = Color3.fromRGB(245, 70, 70)
-medalCloseButton.Font = Enum.Font.GothamBold
-medalCloseButton.TextSize = 20
-medalCloseButton.AutoButtonColor = true
-Instance.new("\085\073\067\111\114\110\101\114", medalCloseButton).CornerRadius = UDim.new(0, 4)
-local medalCloseStroke = Instance.new("\085\073\083\116\114\111\107\101", medalCloseButton)
-medalCloseStroke.Color = Color3.fromRGB(125, 30, 35)
-medalCloseStroke.Thickness = 1
-
-local medalScroll = Instance.new("\083\099\114\111\108\108\105\110\103\070\114\097\109\101", tabMedal)
-medalScroll.Name = "\077\101\100\097\108\067\111\110\116\101\110\116"
-medalScroll.Size = UDim2.new(1, -20, 1, -48)
-medalScroll.Position = UDim2.new(0, 10, 0, 43)
-medalScroll.BackgroundTransparency = 1
-medalScroll.BorderSizePixel = 0
-medalScroll.ScrollBarThickness = UserInputService.TouchEnabled and 8 or 4
-medalScroll.ScrollingEnabled = true
-medalScroll.ScrollingDirection = Enum.ScrollingDirection.Y
-medalScroll.ElasticBehavior = Enum.ElasticBehavior.Never
-medalScroll.Active = true
-medalScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-medalScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-
-local medalLayout = Instance.new("\085\073\076\105\115\116\076\097\121\111\117\116", medalScroll)
-medalLayout.Padding = UDim.new(0, 6)
-medalLayout.SortOrder = Enum.SortOrder.LayoutOrder
-medalLayout:GetPropertyChangedSignal("\065\098\115\111\108\117\116\101\067\111\110\116\101\110\116\083\105\122\101"):Connect(function()
-
-medalScroll.CanvasSize = UDim2.new(0, 0, 0, medalLayout.AbsoluteContentSize.Y + 80)
-end)
-
-local function MedalLabel(text, order, height, color, size, bold)
-local label = Instance.new("\084\101\120\116\076\097\098\101\108", medalScroll)
-label.LayoutOrder = order
-label.Size = UDim2.new(1, -6, 0, height)
-label.BackgroundTransparency = 1
-label.BorderSizePixel = 0
-label.Text = text
-label.TextColor3 = color or Color3.fromRGB(220, 220, 220)
-label.Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham
-label.TextSize = size or 11
-label.TextXAlignment = Enum.TextXAlignment.Left
-label.TextYAlignment = Enum.TextYAlignment.Center
-label.TextWrapped = true
-return label
-end
-
-local function MedalButton(text, order, color, height)
-local btn = Instance.new("\084\101\120\116\066\117\116\116\111\110", medalScroll)
-btn.LayoutOrder = order
-btn.Size = UDim2.new(1, -6, 0, height or 32)
-btn.BackgroundColor3 = color or Color3.fromRGB(18, 18, 18)
-btn.BorderSizePixel = 0
-btn.AutoButtonColor = true
-btn.Text = text
-btn.TextColor3 = Color3.fromRGB(245, 245, 245)
-btn.Font = Enum.Font.GothamBold
-btn.TextSize = 11
-btn.TextWrapped = true
-Instance.new("\085\073\067\111\114\110\101\114", btn).CornerRadius = UDim.new(0, 4)
-local edge = Instance.new("\085\073\083\116\114\111\107\101", btn)
-edge.Color = Color3.fromRGB(65, 35, 35)
-edge.Thickness = 1
-return btn
-end
-
-MedalLabel("\083\101\108\101\099\105\111\110\101\032\118\195\161\114\105\111\115\032\105\116\101\110\115\059\032\195\151\032\115\097\108\118\097\047\102\101\099\104\097\046\032\079\102\101\114\116\097\115\032\097\116\117\097\108\105\122\097\109\032\097\032\099\097\100\097\032\054\048\032\115\101\103\117\110\100\111\115\046", 1, 30, Color3.fromRGB(155, 155, 155), 10, false)
-
-local medalShopStatus = MedalLabel("\076\079\074\065\032\047\047\032\097\103\117\097\114\100\097\110\100\111\032\099\111\110\115\117\108\116\097", 2, 28, Color3.fromRGB(150, 150, 150), 10, false)
-local medalAlertStatus = MedalLabel("\065\076\069\082\084\065\083\032\047\047\032\105\110\105\099\105\097\110\100\111\046\046\046", 0, 42, Color3.fromRGB(220, 185, 90), 10, false)
-medalAlertStatus.Name = "\065\114\097\115\097\107\097\077\101\100\097\108\065\108\101\114\116\083\116\097\116\117\115"
-
-local medalOpenShopButton = MedalButton("\065\066\082\073\082\032\047\032\065\084\085\065\076\073\090\065\082\032\076\079\074\065\032\077\069\068\065\076", 3, Color3.fromRGB(145, 25, 32), 34)
-local medalAutoBuyButton = MedalButton("\065\085\084\079\032\067\079\077\080\082\065\058\032" .. (medalAutoBuyEnabled and "\079\078\032\240\159\159\162" or "\079\070\070\032\240\159\148\180"), 4,
-medalAutoBuyEnabled and Color3.fromRGB(30, 105, 50) or Color3.fromRGB(35, 35, 35), 32)
-local medalSelectionInfo = MedalLabel("\083\069\076\069\067\073\079\078\065\068\079\083\058\032\048", 5, 22, Color3.fromRGB(200, 200, 200), 10, true)
-local medalOffersHeader = MedalLabel("\079\070\069\082\084\065\083\032\068\065\032\076\079\074\065", 6, 25, Color3.fromRGB(235, 65, 65), 12, true)
-medalOffersHeader.Visible = false
-
-
-local medalPassStatus = MedalLabel("", 9001, 0, Color3.fromRGB(150, 150, 150), 10, false)
-medalPassStatus.Visible = false
-local medalRefreshPassButton = MedalButton("", 9002, Color3.fromRGB(25, 25, 25), 0)
-medalRefreshPassButton.Visible = false
-local medalClaimPassButton = MedalButton("", 9003, Color3.fromRGB(145, 25, 32), 0)
-medalClaimPassButton.Visible = false
-local medalAutoPassButton = MedalButton("", 9004, Color3.fromRGB(35, 35, 35), 0)
-medalAutoPassButton.Visible = false
-medalAutoPassEnabled = false
-
-local medalRarityColors = {
-Common = Color3.fromRGB(200, 200, 210),
-Rare = Color3.fromRGB(80, 160, 255),
-Epic = Color3.fromRGB(170, 80, 255),
-Legendary = Color3.fromRGB(255, 176, 46),
-Mythical = Color3.fromRGB(255, 70, 110),
-Unique = Color3.fromRGB(255, 80, 200),
-}
-
-local function MedalSetShopStatus(message, color)
-medalShopStatus.Text = "\076\079\074\065\032\047\047\032" .. tostring(message)
-medalShopStatus.TextColor3 = color or Color3.fromRGB(150, 150, 150)
-end
-
-local function MedalSetPassStatus(message, color)
-medalPassStatus.Text = "\080\065\083\083\069\032\047\047\032" .. tostring(message)
-medalPassStatus.TextColor3 = color or Color3.fromRGB(150, 150, 150)
-end
-
-local function MedalSelectedCount()
-local count = 0
-for _, enabled in pairs(medalSelectedItems) do
-if enabled then count = count + 1 end
-end
-return count
-end
-
-local function MedalUpdateSelectionInfo()
-medalSelectionInfo.Text = "\083\069\076\069\067\073\079\078\065\068\079\083\058\032" .. tostring(MedalSelectedCount()) ..
-(medalAutoBuyEnabled and "\032\032\047\047\032\032\065\085\084\079\032\066\085\089\032\065\084\073\086\079" or "\032\032\047\047\032\032\067\079\078\070\073\071\085\082\065\195\135\195\131\079\032\078\195\131\079\032\065\084\073\086\065\068\065")
-end
-
-local function MedalUpdateToggleButtons()
-medalAutoBuyButton.Text = "\065\085\084\079\032\067\079\077\080\082\065\058\032" .. (medalAutoBuyEnabled and "\079\078\032\240\159\159\162" or "\079\070\070\032\240\159\148\180")
-medalAutoBuyButton.BackgroundColor3 = medalAutoBuyEnabled and Color3.fromRGB(30, 105, 50) or Color3.fromRGB(35, 35, 35)
-medalAutoPassButton.Text = "\065\085\084\079\032\067\079\076\069\084\065\082\032\080\065\083\083\069\058\032" .. (medalAutoPassEnabled and "\079\078\032\240\159\159\162" or "\079\070\070\032\240\159\148\180")
-medalAutoPassButton.BackgroundColor3 = medalAutoPassEnabled and Color3.fromRGB(30, 105, 50) or Color3.fromRGB(35, 35, 35)
-MedalUpdateSelectionInfo()
-end
-
-local function MedalSaveConfig()
-local data = {
-SelectedItems = {},
-AutoBuyEnabled = medalAutoBuyEnabled,
-AutoPassEnabled = medalAutoPassEnabled,
-}
-for name, enabled in pairs(medalSelectedItems) do
-if enabled then data.SelectedItems[name] = true end
-end
-_G.ArasakaMedalConfig = data
-
-if writefile then
-local ok = pcall(function()
-writefile(medalConfigFile, HttpService:JSONEncode(data))
-end)
-if ok then
-MedalSetShopStatus("\099\111\110\102\105\103\117\114\097\195\167\195\163\111\032\115\097\108\118\097\032\110\111\032\097\114\113\117\105\118\111\032\108\111\099\097\108\046", Color3.fromRGB(75, 210, 115))
-return true
-end
-end
-MedalSetShopStatus("\099\111\110\102\105\103\117\114\097\195\167\195\163\111\032\103\117\097\114\100\097\100\097\032\110\101\115\116\097\032\115\101\115\115\195\163\111\059\032\119\114\105\116\101\102\105\108\101\032\105\110\100\105\115\112\111\110\195\173\118\101\108\046", Color3.fromRGB(230, 180, 70))
-return false
-end
-
-local function MedalNormalizeImageId(value)
-if typeof(value) == "\110\117\109\098\101\114" then
-if value > 0 then return "\114\098\120\097\115\115\101\116\105\100\058\047\047" .. tostring(math.floor(value)) end
-return nil
-end
-if typeof(value) ~= "\115\116\114\105\110\103" then return nil end
-value = value:gsub("\094\037\115\043", ""):gsub("\037\115\043\036", "")
-if value == "" then return nil end
-if value:match("\094\037\100\043\036") then return "\114\098\120\097\115\115\101\116\105\100\058\047\047" .. value end
-if value:match("\094\114\098\120\097\115\115\101\116\105\100\058\047\047") or value:match("\094\104\116\116\112\115\063\058\047\047") then return value end
-return nil
-end
-
-local function MedalFindOfferImage(offer)
-for _, key in ipairs({"\073\099\111\110", "\073\109\097\103\101", "\073\109\097\103\101\073\100", "\073\099\111\110\073\100", "\084\104\117\109\098\110\097\105\108", "\084\104\117\109\098\110\097\105\108\073\100", "\073\116\101\109\073\099\111\110", "\084\101\120\116\117\114\101\073\100"}) do
-local imageId = MedalNormalizeImageId(offer[key])
-if imageId then return imageId end
-end
-return nil
-end
-
-local function MedalAddViewportFallback(offer, imageBox)
-local itemName = tostring(offer.ItemName or "")
-if itemName == "" then return false end
-local roots = {}
-local shared = ReplicatedStorage:FindFirstChild("\115\104\097\114\101\100")
-local runtime = shared and shared:FindFirstChild("\114\117\110\116\105\109\101")
-local petFolder = runtime and runtime:FindFirstChild("\099\080\101\116\083\104\111\112\070\111\108\100\101\114")
-if petFolder then table.insert(roots, petFolder) end
-local medalWorld = workspace:FindFirstChild("\077\101\100\097\108\083\104\111\112")
-if medalWorld then table.insert(roots, medalWorld) end
-
-local source = nil
-for _, root in ipairs(roots) do
-local found = root:FindFirstChild(itemName, true)
-if found and (found:IsA("\077\111\100\101\108") or found:IsA("\066\097\115\101\080\097\114\116")) then
-source = found
-break
-end
-end
-if not source then return false end
-
-local viewport = Instance.new("\086\105\101\119\112\111\114\116\070\114\097\109\101")
-viewport.Name = "\073\116\101\109\086\105\101\119\112\111\114\116"
-viewport.Size = UDim2.fromScale(1, 1)
-viewport.BackgroundTransparency = 1
-viewport.Ambient = Color3.fromRGB(180, 180, 180)
-viewport.LightColor = Color3.fromRGB(255, 240, 240)
-viewport.LightDirection = Vector3.new(-1, -1, -1)
-viewport.Parent = imageBox
-
-local worldModel = Instance.new("\087\111\114\108\100\077\111\100\101\108")
-worldModel.Parent = viewport
-local ok, copy = pcall(function() return source:Clone() end)
-if not ok or not copy then viewport:Destroy(); return false end
-for _, descendant in ipairs(copy:GetDescendants()) do
-if descendant:IsA("\066\097\115\101\083\099\114\105\112\116") or descendant:IsA("\077\111\100\117\108\101\083\099\114\105\112\116") then
-descendant:Destroy()
-elseif descendant:IsA("\066\097\115\101\080\097\114\116") then
-descendant.Anchored = true
-descendant.CanCollide = false
-end
-end
-if copy:IsA("\066\097\115\101\080\097\114\116") then
-copy.Anchored = true
-copy.CanCollide = false
-end
-copy.Parent = worldModel
-
-local cf, size
-local gotBounds = pcall(function()
-if copy:IsA("\077\111\100\101\108") then
-cf, size = copy:GetBoundingBox()
-else
-cf, size = copy.CFrame, copy.Size
-end
-end)
-if not gotBounds or not size or size.Magnitude < 0.01 then
-viewport:Destroy()
-return false
-end
-local camera = Instance.new("\067\097\109\101\114\097")
-camera.FieldOfView = 38
-camera.Parent = viewport
-local distance = math.max(size.X, size.Y, size.Z) * 2.25
-camera.CFrame = CFrame.lookAt(cf.Position + Vector3.new(distance, distance * 0.35, distance), cf.Position)
-viewport.CurrentCamera = camera
-return true
-end
-
-local MedalRenderOffers
-MedalRenderOffers = function(state)
-if not medalShopVisible then return end
-for _, child in ipairs(medalScroll:GetChildren()) do
-if child.Name == "\077\101\100\097\108\079\102\102\101\114\067\097\114\100" or child.Name == "\077\101\100\097\108\069\109\112\116\121\083\116\097\116\101" then
-child:Destroy()
-end
-end
-
-local offers = {}
-if type(state) == "\116\097\098\108\101" and type(state.Offers) == "\116\097\098\108\101" then
-for _, offer in ipairs(state.Offers) do
-if type(offer) == "\116\097\098\108\101" and tonumber(offer.SlotIndex) then
-table.insert(offers, offer)
-end
-end
-end
-
-table.sort(offers, function(a, b)
-local order = {Common = 1, Rare = 2, Epic = 3, Legendary = 4, Mythical = 5, Unique = 6}
-local ra, rb = order[a.Rarity] or 7, order[b.Rarity] or 7
-if ra == rb then return (tonumber(a.SlotIndex) or 0) < (tonumber(b.SlotIndex) or 0) end
-return ra < rb
-end)
-medalCurrentOffers = offers
-
-if #offers == 0 then
-local empty = Instance.new("\084\101\120\116\076\097\098\101\108", medalScroll)
-empty.Name = "\077\101\100\097\108\069\109\112\116\121\083\116\097\116\101"
-empty.LayoutOrder = 9
-empty.Size = UDim2.new(1, -6, 0, 44)
-empty.BackgroundColor3 = Color3.fromRGB(12, 12, 12)
-empty.BorderSizePixel = 0
-empty.Text = "\078\101\110\104\117\109\097\032\111\102\101\114\116\097\032\100\105\115\112\111\110\195\173\118\101\108\046\032\067\108\105\113\117\101\032\101\109\032\065\066\082\073\082\032\047\032\065\084\085\065\076\073\090\065\082\032\076\079\074\065\032\077\069\068\065\076\046"
-empty.TextColor3 = Color3.fromRGB(145, 145, 145)
-empty.Font = Enum.Font.Gotham
-empty.TextSize = 10
-empty.TextWrapped = true
-Instance.new("\085\073\067\111\114\110\101\114", empty).CornerRadius = UDim.new(0, 4)
-return
-end
-
-for index, offer in ipairs(offers) do
-local itemName = tostring(offer.ItemName or "\073\116\101\109\032\100\101\115\099\111\110\104\101\099\105\100\111")
-local selected = medalSelectedItems[itemName] == true
-local remaining = tonumber(offer.Remaining) or 0
-local rarityColor = medalRarityColors[offer.Rarity] or Color3.fromRGB(150, 150, 150)
-
-local card = Instance.new("\070\114\097\109\101", medalScroll)
-card.Name = "\077\101\100\097\108\079\102\102\101\114\067\097\114\100"
-card.LayoutOrder = 100 + index
-card.Size = UDim2.new(1, -6, 0, 88)
-card.BackgroundColor3 = selected and Color3.fromRGB(31, 9, 12) or Color3.fromRGB(12, 12, 12)
-card.BorderSizePixel = 0
-Instance.new("\085\073\067\111\114\110\101\114", card).CornerRadius = UDim.new(0, 5)
-local cardStroke = Instance.new("\085\073\083\116\114\111\107\101", card)
-cardStroke.Color = selected and Color3.fromRGB(215, 50, 50) or Color3.fromRGB(45, 45, 45)
-cardStroke.Thickness = 1
-
-local rarityBar = Instance.new("\070\114\097\109\101", card)
-rarityBar.Size = UDim2.new(0, 3, 1, -14)
-rarityBar.Position = UDim2.new(0, 0, 0, 7)
-rarityBar.BackgroundColor3 = rarityColor
-rarityBar.BorderSizePixel = 0
-
-local imageBox = Instance.new("\070\114\097\109\101", card)
-imageBox.Position = UDim2.new(0, 9, 0, 9)
-imageBox.Size = UDim2.new(0, 68, 0, 68)
-imageBox.BackgroundColor3 = Color3.fromRGB(5, 5, 5)
-imageBox.BorderSizePixel = 0
-Instance.new("\085\073\067\111\114\110\101\114", imageBox).CornerRadius = UDim.new(0, 4)
-local imageStroke = Instance.new("\085\073\083\116\114\111\107\101", imageBox)
-imageStroke.Color = rarityColor
-imageStroke.Transparency = 0.25
-imageStroke.Thickness = 1
-
-local imageId = MedalFindOfferImage(offer)
-if imageId then
-local image = Instance.new("\073\109\097\103\101\076\097\098\101\108", imageBox)
-image.Name = "\073\116\101\109\073\109\097\103\101"
-image.Position = UDim2.new(0, 4, 0, 4)
-image.Size = UDim2.new(1, -8, 1, -8)
-image.BackgroundTransparency = 1
-image.Image = imageId
-image.ScaleType = Enum.ScaleType.Fit
-elseif not MedalAddViewportFallback(offer, imageBox) then
-local noImage = Instance.new("\084\101\120\116\076\097\098\101\108", imageBox)
-noImage.Size = UDim2.fromScale(1, 1)
-noImage.BackgroundTransparency = 1
-noImage.Text = "\083\069\077\032\073\077\065\071\069\077"
-noImage.TextColor3 = Color3.fromRGB(100, 100, 100)
-noImage.Font = Enum.Font.Code
-noImage.TextSize = 8
-end
-
-local name = Instance.new("\084\101\120\116\076\097\098\101\108", card)
-name.BackgroundTransparency = 1
-name.Position = UDim2.new(0, 86, 0, 9)
-name.Size = UDim2.new(1, -190, 0, 22)
-name.Text = string.upper(tostring(tonumber(offer.Quantity) or 1) .. "\120\032\032" .. itemName)
-name.TextColor3 = Color3.fromRGB(240, 240, 240)
-name.Font = Enum.Font.GothamBold
-name.TextSize = 11
-name.TextXAlignment = Enum.TextXAlignment.Left
-name.TextTruncate = Enum.TextTruncate.AtEnd
-name.Parent = card
-
-local detail = Instance.new("\084\101\120\116\076\097\098\101\108", card)
-detail.BackgroundTransparency = 1
-detail.Position = UDim2.new(0, 86, 0, 33)
-detail.Size = UDim2.new(1, -190, 0, 17)
-detail.Text = string.upper(tostring(offer.Rarity or "\085\078\075\078\079\087\078")) .. "\032\032\047\032\032\069\083\084\079\081\085\069\032" .. tostring(remaining)
-detail.TextColor3 = rarityColor
-detail.Font = Enum.Font.Code
-detail.TextSize = 9
-detail.TextXAlignment = Enum.TextXAlignment.Left
-detail.TextTruncate = Enum.TextTruncate.AtEnd
-detail.Parent = card
-
-local price = Instance.new("\084\101\120\116\076\097\098\101\108", card)
-price.BackgroundTransparency = 1
-price.Position = UDim2.new(0, 86, 0, 53)
-price.Size = UDim2.new(1, -190, 0, 19)
-price.Text = typeof(offer.Price) == "\110\117\109\098\101\114"
-and (tostring(math.floor(offer.Price)) .. "\032\109\101\100\097\108\104\097\115")
-or tostring(offer.Price or "\063")
-price.TextColor3 = Color3.fromRGB(235, 190, 85)
-price.Font = Enum.Font.GothamSemibold
-price.TextSize = 10
-price.TextXAlignment = Enum.TextXAlignment.Left
-price.TextTruncate = Enum.TextTruncate.AtEnd
-price.Parent = card
-
-local selectButton = Instance.new("\084\101\120\116\066\117\116\116\111\110", card)
-selectButton.Size = UDim2.new(0, 92, 0, 30)
-selectButton.Position = UDim2.new(1, -102, 0.5, -15)
-selectButton.BackgroundColor3 = selected and Color3.fromRGB(145, 25, 32) or Color3.fromRGB(22, 22, 22)
-selectButton.BorderSizePixel = 0
-selectButton.Text = selected and "\226\156\147\032\077\065\082\067\065\068\079" or "\043\032\083\069\076\069\067\073\079\078\065\082"
-selectButton.TextColor3 = Color3.fromRGB(245, 245, 245)
-selectButton.Font = Enum.Font.GothamBold
-selectButton.TextSize = 9
-selectButton.TextWrapped = true
-Instance.new("\085\073\067\111\114\110\101\114", selectButton).CornerRadius = UDim.new(0, 4)
-selectButton.Activated:Connect(function()
-medalSelectedItems[itemName] = not medalSelectedItems[itemName]
-if not medalSelectedItems[itemName] then medalSelectedItems[itemName] = nil end
-MedalUpdateSelectionInfo()
-MedalRenderOffers(medalCurrentState or state)
-end)
-end
-MedalUpdateSelectionInfo()
-end
-
-local medalRateLimitedUntil = 0
-
-local function MedalIsRateLimited()
-return os.clock() < medalRateLimitedUntil
-end
-
-local function MedalMarkRateLimited(seconds)
-seconds = tonumber(seconds) or 8
-medalRateLimitedUntil = math.max(medalRateLimitedUntil, os.clock() + seconds)
-end
-
-local function MedalGetShopState()
-if not medalShopRemote or not medalShopRemote:IsA("\082\101\109\111\116\101\070\117\110\099\116\105\111\110") then
-return nil, "\082\101\109\111\116\101\032\109\101\100\097\108\083\104\111\112\082\101\109\111\116\101\032\110\195\163\111\032\101\110\099\111\110\116\114\097\100\111\046"
-end
-if MedalIsRateLimited() then
-local left = math.ceil(medalRateLimitedUntil - os.clock())
-return nil, "\114\097\116\101\076\105\109\105\116\101\100\032\040\097\103\117\097\114\100\101\032" .. tostring(left) .. "\115\041"
-end
-local ok, response = pcall(function()
-return medalShopRemote:InvokeServer("\071\101\116\083\116\097\116\101")
-end)
-if not ok then return nil, tostring(response) end
-if type(response) ~= "\116\097\098\108\101" or response.Ok == false then
-local reason = type(response) == "\116\097\098\108\101" and response.Reason or nil
-if reason == "\110\111\116\073\110\071\121\109" then
-return nil, "\101\110\116\114\101\032\110\111\032\099\195\173\114\099\117\108\111\032\100\097\032\077\101\100\097\108\032\083\104\111\112\059\032\111\032\115\101\114\118\105\100\111\114\032\114\101\099\117\115\111\117\032\102\111\114\097\032\100\097\032\195\161\114\101\097\032\040\110\111\116\073\110\071\121\109\041\046"
-end
-if reason == "\114\097\116\101\076\105\109\105\116\101\100" or reason == "\082\097\116\101\076\105\109\105\116\101\100" or tostring(reason or ""):lower():find("\114\097\116\101\108\105\109\105\116", 1, true) then
-MedalMarkRateLimited(10)
-return nil, "\114\097\116\101\076\105\109\105\116\101\100"
-end
-return nil, tostring(reason or "\101\115\116\097\100\111\032\100\097\032\108\111\106\097\032\105\110\118\195\161\108\105\100\111\046")
-end
-Core:ObserveMedalShopState(response)
-return response, nil
-end
-
-local function MedalRefreshShop()
-if medalShopBusy then return false end
-medalShopVisible = true
-medalOffersHeader.Visible = true
-medalOffersHeader.Size = UDim2.new(1, -6, 0, 25)
-medalShopBusy = true
-MedalSetShopStatus("\099\111\110\115\117\108\116\097\110\100\111\032\111\102\101\114\116\097\115\046\046\046", Color3.fromRGB(170, 170, 170))
-local state, err = MedalGetShopState()
-if state then
-medalCurrentState = state
-MedalRenderOffers(state)
-local count = type(state.Offers) == "\116\097\098\108\101" and #state.Offers or 0
-MedalSetShopStatus(tostring(count) .. "\032\111\102\101\114\116\097\040\115\041\032\099\097\114\114\101\103\097\100\097\040\115\041\046", Color3.fromRGB(75, 210, 115))
-medalShopBusy = false
-return true
-end
-MedalSetShopStatus(tostring(err or "\110\195\163\111\032\102\111\105\032\112\111\115\115\195\173\118\101\108\032\099\111\110\115\117\108\116\097\114\032\097\032\108\111\106\097\046"), Color3.fromRGB(235, 75, 75))
-medalShopBusy = false
-return false
-end
-
-local function MedalAutoRefreshShop()
-if medalShopBusy then return false end
-medalShopBusy = true
-local state, err = MedalGetShopState()
-if state then
-medalCurrentState = state
-local count = type(state.Offers) == "\116\097\098\108\101" and #state.Offers or 0
-if medalShopVisible then
-MedalRenderOffers(state)
-MedalSetShopStatus(tostring(count) .. "\032\111\102\101\114\116\097\040\115\041\032\115\105\110\099\114\111\110\105\122\097\100\097\040\115\041\032\097\117\116\111\109\097\116\105\099\097\109\101\110\116\101\032\040\054\048\115\041\046", Color3.fromRGB(75, 210, 115))
-end
-elseif medalShopVisible then
-MedalSetShopStatus("\097\116\117\097\108\105\122\097\195\167\195\163\111\032\097\117\116\111\109\195\161\116\105\099\097\032\102\097\108\104\111\117\058\032" .. tostring(err or "\101\114\114\111\032\100\101\115\099\111\110\104\101\099\105\100\111\046"), Color3.fromRGB(230, 180, 70))
-end
-medalShopBusy = false
-return state ~= nil
-end
-
-local function MedalFindMatchingOffer(state, itemName, slotIndex)
-if type(state) ~= "\116\097\098\108\101" or type(state.Offers) ~= "\116\097\098\108\101" then return nil end
-local fallback = nil
-for _, offer in ipairs(state.Offers) do
-if type(offer) == "\116\097\098\108\101" and tostring(offer.ItemName or "") == itemName then
-if tonumber(offer.SlotIndex) == tonumber(slotIndex) then return offer end
-fallback = fallback or offer
-end
-end
-return fallback
-end
-
-local function MedalAutoBuyCycle()
-if medalShopBusy or not medalAutoBuyEnabled or MedalSelectedCount() == 0 then return end
-if MedalIsRateLimited() then
-local left = math.ceil(medalRateLimitedUntil - os.clock())
-MedalSetShopStatus("\114\097\116\101\076\105\109\105\116\101\100\059\032\112\097\117\115\097\110\100\111\032\099\111\109\112\114\097\115\032\112\111\114\032" .. tostring(left) .. "\115\046\046\046", Color3.fromRGB(230, 180, 70))
-return
-end
-medalShopBusy = true
-
-
-local state, err = MedalGetShopState()
-if not state then
-if tostring(err or ""):find("\114\097\116\101\076\105\109\105\116\101\100", 1, true) then
-MedalMarkRateLimited(10)
-end
-MedalSetShopStatus(tostring(err or "\097\103\117\097\114\100\097\110\100\111\032\097\032\108\111\106\097\032\102\105\099\097\114\032\100\105\115\112\111\110\195\173\118\101\108\059\032\118\111\117\032\116\101\110\116\097\114\032\110\111\118\097\109\101\110\116\101\046"), Color3.fromRGB(230, 180, 70))
-medalShopBusy = false
-return
-end
-medalCurrentState = state
-if medalShopVisible then
-MedalRenderOffers(state)
-end
-
-local selectedNames = {}
-for name, enabled in pairs(medalSelectedItems) do
-if enabled then table.insert(selectedNames, name) end
-end
-table.sort(selectedNames)
-
-local purchasedAny = false
-local hitRateLimit = false
-
-for _, itemName in ipairs(selectedNames) do
-if not medalAutoBuyEnabled or not Core:IsAlive() or hitRateLimit then break end
-if MedalIsRateLimited() then
-hitRateLimit = true
-break
-end
-
-local offer = MedalFindMatchingOffer(medalCurrentState, itemName)
-local remaining = offer and math.max(0, math.floor(tonumber(offer.Remaining) or 0)) or 0
-if offer and remaining > 0 then
-
-
-local maxAttempts = math.min(remaining, 40)
-local attempt = 0
-while attempt < maxAttempts do
-if not medalAutoBuyEnabled or not Core:IsAlive() then break end
-if MedalIsRateLimited() then
-hitRateLimit = true
-break
-end
-if not offer or not offer.SlotIndex or not offer.Key then break end
-
-attempt += 1
-local ok, result = pcall(function()
-return medalShopRemote:InvokeServer("\080\117\114\099\104\097\115\101", {
-SlotIndex = offer.SlotIndex,
-Key = offer.Key,
-})
-end)
-
-if ok and type(result) == "\116\097\098\108\101" and result.Ok == true then
-purchasedAny = true
-remaining = math.max(0, remaining - 1)
-if type(result.Remaining) == "\110\117\109\098\101\114" then
-remaining = math.max(0, math.floor(result.Remaining))
-end
-if type(offer) == "\116\097\098\108\101" then
-offer.Remaining = remaining
-end
-MedalSetShopStatus("\099\111\109\112\114\097\100\111\058\032" .. itemName .. "\032\032\040" .. tostring(attempt) .. "\047" .. tostring(maxAttempts) .. "\041", Color3.fromRGB(75, 210, 115))
-
-task.wait(0.75)
-if remaining <= 0 then break end
-else
-local reason = ok and type(result) == "\116\097\098\108\101" and result.Reason or tostring(result)
-local reasonLower = string.lower(tostring(reason or ""))
-if reason == "\114\097\116\101\076\105\109\105\116\101\100" or reasonLower:find("\114\097\116\101\108\105\109\105\116", 1, true) then
-MedalMarkRateLimited(12)
-hitRateLimit = true
-MedalSetShopStatus("\114\097\116\101\076\105\109\105\116\101\100\032\110\097\032\099\111\109\112\114\097\032\100\101\032" .. itemName .. "\059\032\112\097\117\115\097\110\100\111\046\046\046", Color3.fromRGB(230, 180, 70))
-break
-elseif reason == "\110\111\116\073\110\071\121\109" then
-MedalSetShopStatus("\101\110\116\114\101\032\110\111\032\099\195\173\114\099\117\108\111\032\100\097\032\108\111\106\097\059\032\099\111\109\112\114\097\032\112\097\117\115\097\100\097\032\101\032\115\101\114\195\161\032\116\101\110\116\097\100\097\032\110\111\118\097\109\101\110\116\101\046", Color3.fromRGB(230, 180, 70))
-break
-elseif reason == "\105\110\115\117\102\102\105\099\105\101\110\116\077\101\100\097\108\115" or reason == "\110\111\116\069\110\111\117\103\104\077\101\100\097\108\115" then
-MedalSetShopStatus("\115\097\108\100\111\032\105\110\115\117\102\105\099\105\101\110\116\101\032\112\097\114\097\032" .. itemName .. "\059\032\118\111\117\032\116\101\110\116\097\114\032\110\111\118\097\109\101\110\116\101\032\100\101\112\111\105\115\046", Color3.fromRGB(230, 180, 70))
-break
-elseif reason == "\115\111\108\100\079\117\116" or reason == "\110\111\083\116\111\099\107" or reason == "\111\117\116\079\102\083\116\111\099\107" or remaining <= 0 then
-break
-else
-
-local freshState, freshErr = MedalGetShopState()
-if freshState then
-medalCurrentState = freshState
-offer = MedalFindMatchingOffer(freshState, itemName, offer and offer.SlotIndex)
-remaining = offer and math.max(0, math.floor(tonumber(offer.Remaining) or 0)) or 0
-if not offer or remaining <= 0 then break end
-task.wait(0.4)
-else
-if tostring(freshErr or ""):find("\114\097\116\101\076\105\109\105\116\101\100", 1, true) then
-MedalMarkRateLimited(10)
-hitRateLimit = true
-end
-MedalSetShopStatus("\099\111\109\112\114\097\032\114\101\099\117\115\097\100\097\032\112\097\114\097\032" .. itemName .. "\058\032" .. tostring(reason or freshErr or "\101\114\114\111"), Color3.fromRGB(235, 75, 75))
-break
-end
-end
-end
-end
-end
-end
-
-
-if medalShopVisible and not MedalIsRateLimited() then
-local finalState, finalErr = MedalGetShopState()
-if finalState then
-medalCurrentState = finalState
-MedalRenderOffers(finalState)
-MedalSetShopStatus(
-purchasedAny
-and ("\099\105\099\108\111\032\099\111\110\099\108\117\195\173\100\111\059\032" .. tostring(MedalSelectedCount()) .. "\032\105\116\101\109\040\110\115\041\032\115\101\108\101\099\105\111\110\097\100\111\040\115\041\046")
-or ("\115\101\109\032\101\115\116\111\113\117\101\032\110\111\118\111\059\032" .. tostring(MedalSelectedCount()) .. "\032\105\116\101\109\040\110\115\041\032\115\101\108\101\099\105\111\110\097\100\111\040\115\041\046"),
-Color3.fromRGB(75, 210, 115)
-)
-elseif finalErr then
-MedalSetShopStatus(tostring(finalErr), Color3.fromRGB(230, 180, 70))
-end
-elseif hitRateLimit or MedalIsRateLimited() then
-local left = math.ceil(math.max(0, medalRateLimitedUntil - os.clock()))
-MedalSetShopStatus("\114\097\116\101\076\105\109\105\116\101\100\059\032\114\101\116\111\109\097\110\100\111\032\101\109\032" .. tostring(left) .. "\115\046\046\046", Color3.fromRGB(230, 180, 70))
-elseif purchasedAny then
-MedalSetShopStatus("\099\105\099\108\111\032\099\111\110\099\108\117\195\173\100\111\059\032" .. tostring(MedalSelectedCount()) .. "\032\105\116\101\109\040\110\115\041\032\115\101\108\101\099\105\111\110\097\100\111\040\115\041\046", Color3.fromRGB(75, 210, 115))
-end
-medalShopBusy = false
-end
-
-local function MedalStartAutoBuyLoop()
-if medalBuyLoopRunning then return end
-medalBuyLoopRunning = true
-task.spawn(function()
-while medalAutoBuyEnabled and Core:IsAlive() do
-local ok, err = pcall(MedalAutoBuyCycle)
-if not ok then
-medalShopBusy = false
-MedalSetShopStatus("\101\114\114\111\032\105\110\116\101\114\110\111\058\032" .. tostring(err), Color3.fromRGB(235, 75, 75))
-end
-
-if MedalIsRateLimited() then
-local left = math.max(1, medalRateLimitedUntil - os.clock())
-task.wait(left + 0.5)
-else
-task.wait(3.5)
-end
-end
-medalBuyLoopRunning = false
-end)
-end
-
-local function MedalGetPassModule()
-if medalPassModule then return medalPassModule end
-local shared = ReplicatedStorage:FindFirstChild("\115\104\097\114\101\100")
-local modules = shared and shared:FindFirstChild("\109\111\100\117\108\101\115")
-if not modules then return nil end
-for _, moduleName in ipairs({"\083\116\114\111\110\103\098\108\111\120\105\097\110\080\097\115\115", "\083\116\114\111\110\103\098\108\111\120\105\097\110\080\097\115\115\077\111\100\117\108\101"}) do
-local candidate = modules:FindFirstChild(moduleName)
-if candidate and candidate:IsA("\077\111\100\117\108\101\083\099\114\105\112\116") then
-local ok, result = pcall(require, candidate)
-if ok and type(result) == "\116\097\098\108\101" then
-medalPassModule = result
-return result
-end
-end
-end
-return nil
-end
-
-local function MedalParsePassXP(state)
-for _, key in ipairs({"\069\120\112", "\088\080", "\088\112", "\069\120\112\101\114\105\101\110\099\101", "\067\117\114\114\101\110\116\088\080", "\067\117\114\114\101\110\116\069\120\112"}) do
-local value = tonumber(state[key])
-if value then return math.max(0, value) end
-end
-if type(state.Progress) == "\116\097\098\108\101" then
-for _, key in ipairs({"\069\120\112", "\088\080", "\088\112", "\069\120\112\101\114\105\101\110\099\101", "\067\117\114\114\101\110\116\088\080"}) do
-local value = tonumber(state.Progress[key])
-if value then return math.max(0, value) end
-end
-end
-return nil
-end
-
-local function MedalParseClaimedTiers(state)
-local source = nil
-for _, key in ipairs({"\067\108\097\105\109\101\100", "\080\097\115\115\067\108\097\105\109\101\100", "\067\108\097\105\109\101\100\084\105\101\114\115", "\084\105\101\114\115\067\108\097\105\109\101\100"}) do
-if type(state[key]) == "\116\097\098\108\101" then source = state[key]; break end
-end
-local result = {}
-if not source then return result, false end
-for key, value in pairs(source) do
-local numericKey = tonumber(key)
-if type(value) == "\098\111\111\108\101\097\110" then
-if numericKey and value and numericKey >= 1 and numericKey <= 15 then result[numericKey] = true end
-elseif type(value) == "\110\117\109\098\101\114" then
-if value >= 1 and value <= 15 and value == math.floor(value) then result[value] = true end
-elseif type(value) == "\115\116\114\105\110\103" then
-local n = tonumber(value)
-if n and n >= 1 and n <= 15 and n == math.floor(n) then result[n] = true end
-elseif type(value) == "\116\097\098\108\101" then
-local tier = tonumber(value.Tier or value.tier or value.Level or value.level or numericKey)
-local claimed = value.Claimed == true or value.claimed == true or value.IsClaimed == true
-or value.isClaimed == true or value.ClaimedAt ~= nil or value.claimedAt ~= nil
-if tier and tier >= 1 and tier <= 15 and claimed then result[tier] = true end
-end
-end
-return result, true
-end
-
-local function MedalInvokePass(action, payload)
-if not medalPassRemote or not medalPassRemote:IsA("\082\101\109\111\116\101\070\117\110\099\116\105\111\110") then
-return nil, "\082\101\109\111\116\101\032\115\116\114\111\110\103\098\108\111\120\105\097\110\080\097\115\115\082\101\109\111\116\101\032\110\195\163\111\032\101\110\099\111\110\116\114\097\100\111\046"
-end
-local ok, response = pcall(function()
-return medalPassRemote:InvokeServer(action, payload or {})
-end)
-if not ok then return nil, tostring(response) end
-if type(response) ~= "\116\097\098\108\101" then return nil, "\114\101\115\112\111\115\116\097\032\105\110\118\195\161\108\105\100\097\032\100\111\032\112\097\115\115\101\046" end
-if response.Ok == false then return response, tostring(response.Reason or "\114\101\113\117\101\115\116\082\101\106\101\099\116\101\100") end
-return response, nil
-end
-
-local function MedalRefreshPassState()
-local response, err = MedalInvokePass("\071\101\116\083\116\097\116\101", {})
-if not response or response.Ok == false then
-medalPassState = nil
-medalPassXP = nil
-medalPassClaimed = {}
-medalPassClaimedKnown = false
-MedalSetPassStatus(tostring(err or (response and response.Reason) or "\102\097\108\104\097\032\097\111\032\099\111\110\115\117\108\116\097\114\046"), Color3.fromRGB(235, 75, 75))
-return false
-end
-local state = type(response.State) == "\116\097\098\108\101" and response.State or response
-if type(state) ~= "\116\097\098\108\101" then
-MedalSetPassStatus("\101\115\116\097\100\111\032\100\111\032\112\097\115\115\101\032\105\110\118\195\161\108\105\100\111\046", Color3.fromRGB(235, 75, 75))
-return false
-end
-
-medalPassState = state
-medalPassXP = MedalParsePassXP(state)
-medalPassClaimed, medalPassClaimedKnown = MedalParseClaimedTiers(state)
-local module = MedalGetPassModule()
-if not medalPassClaimedKnown and module and type(module.IsTierClaimed) == "\102\117\110\099\116\105\111\110" and state.Claimed ~= nil then
-local moduleClaimed = {}
-local allReadable = true
-for tier = 1, 15 do
-local ok, value = pcall(module.IsTierClaimed, state.Claimed, tier)
-if not ok or type(value) ~= "\098\111\111\108\101\097\110" then allReadable = false; break end
-if value then moduleClaimed[tier] = true end
-end
-if allReadable then medalPassClaimed = moduleClaimed; medalPassClaimedKnown = true end
-end
-
-if state.Active == false then
-MedalSetPassStatus("\101\118\101\110\116\111\032\105\110\097\116\105\118\111\032\115\101\103\117\110\100\111\032\111\032\115\101\114\118\105\100\111\114\046", Color3.fromRGB(235, 75, 75))
-elseif medalPassXP == nil then
-MedalSetPassStatus("\088\080\032\110\195\163\111\032\114\101\099\111\110\104\101\099\105\100\111\032\110\111\032\101\115\116\097\100\111\032\114\101\099\101\098\105\100\111\046", Color3.fromRGB(230, 180, 70))
-elseif not medalPassClaimedKnown then
-MedalSetPassStatus("\088\080\032\108\105\100\111\044\032\109\097\115\032\116\105\101\114\115\032\114\101\115\103\097\116\097\100\111\115\032\110\195\163\111\032\112\117\100\101\114\097\109\032\115\101\114\032\099\111\110\102\105\114\109\097\100\111\115\046", Color3.fromRGB(230, 180, 70))
-else
-local claimedCount = 0
-for tier = 1, 15 do if medalPassClaimed[tier] then claimedCount = claimedCount + 1 end end
-MedalSetPassStatus(string.format("\088\080\032\037\100\032\032\047\047\032\032\116\105\101\114\115\032\114\101\115\103\097\116\097\100\111\115\032\037\100\047\049\053", math.floor(medalPassXP), claimedCount), Color3.fromRGB(75, 210, 115))
-end
-return true
-end
-
-local function MedalIsTierUnlocked(tier)
-local module = MedalGetPassModule()
-if module and type(module.TierUnlocked) == "\102\117\110\099\116\105\111\110" and medalPassState and medalPassState.Exp ~= nil then
-local ok, result = pcall(module.TierUnlocked, medalPassState.Exp, tier)
-if ok and type(result) == "\098\111\111\108\101\097\110" then return result end
-end
-return medalPassXP ~= nil and medalPassXP >= (medalPassRequired[tier] or math.huge)
-end
-
-local function MedalIsTierClaimed(tier)
-local module = MedalGetPassModule()
-if module and type(module.IsTierClaimed) == "\102\117\110\099\116\105\111\110" and medalPassState and medalPassState.Claimed ~= nil then
-local ok, result = pcall(module.IsTierClaimed, medalPassState.Claimed, tier)
-if ok and type(result) == "\098\111\111\108\101\097\110" then return result, true end
-end
-return medalPassClaimed[tier] == true, medalPassClaimedKnown
-end
-
-local function MedalCollectPassAvailable()
-if medalPassBusy then return false end
-medalPassBusy = true
-local refreshed = MedalRefreshPassState()
-if not refreshed or medalPassXP == nil or not medalPassClaimedKnown then
-medalPassBusy = false
-return false
-end
-if medalPassState and medalPassState.Active == false then
-medalPassBusy = false
-return false
-end
-
-local maxTier = math.clamp(math.floor(tonumber(medalPassState and medalPassState.MaxTier) or 15), 0, 15)
-local collected = 0
-for tier = 1, maxTier do
-if not Core:IsAlive() then break end
-local claimed, known = MedalIsTierClaimed(tier)
-if known and not claimed and MedalIsTierUnlocked(tier) then
-local response, err = MedalInvokePass("\067\108\097\105\109\084\105\101\114", {Tier = tier})
-if response and response.Ok == true then
-collected = collected + 1
-task.wait(0.25)
-MedalRefreshPassState()
-elseif err then
-MedalSetPassStatus("\116\105\101\114\032" .. tostring(tier) .. "\032\114\101\099\117\115\097\100\111\058\032" .. tostring(err), Color3.fromRGB(230, 180, 70))
-end
-end
-end
-if collected > 0 then
-MedalSetPassStatus("\099\111\108\101\116\097\100\097\115\032" .. tostring(collected) .. "\032\114\101\099\111\109\112\101\110\115\097\040\115\041\032\100\105\115\112\111\110\195\173\118\101\108\040\105\115\041\046", Color3.fromRGB(75, 210, 115))
-elseif medalPassXP ~= nil and medalPassClaimedKnown then
-MedalSetPassStatus("\110\101\110\104\117\109\097\032\114\101\099\111\109\112\101\110\115\097\032\100\101\115\098\108\111\113\117\101\097\100\097\032\112\101\110\100\101\110\116\101\046", Color3.fromRGB(150, 150, 150))
-end
-medalPassBusy = false
-return collected > 0
-end
-
-local function MedalStartAutoPassLoop()
-if medalPassLoopRunning then return end
-medalPassLoopRunning = true
-task.spawn(function()
-while medalAutoPassEnabled and Core:IsAlive() do
-local ok, err = pcall(MedalCollectPassAvailable)
-if not ok then
-medalPassBusy = false
-MedalSetPassStatus("\101\114\114\111\032\105\110\116\101\114\110\111\058\032" .. tostring(err), Color3.fromRGB(235, 75, 75))
-end
-task.wait(5)
-end
-medalPassLoopRunning = false
-end)
-end
-
-medalOpenShopButton.Activated:Connect(function()
-playClickSound()
-MedalRefreshShop()
-end)
-
-medalAutoBuyButton.Activated:Connect(function()
-playClickSound()
-if medalAutoBuyEnabled then
-medalAutoBuyEnabled = false
-local persisted = MedalSaveConfig()
-MedalUpdateToggleButtons()
-MedalSetShopStatus(persisted and "\097\117\116\111\032\099\111\109\112\114\097\032\100\101\115\108\105\103\097\100\097\059\032\099\111\110\102\105\103\117\114\097\195\167\195\163\111\032\115\097\108\118\097\046" or "\097\117\116\111\032\099\111\109\112\114\097\032\100\101\115\108\105\103\097\100\097\059\032\099\111\110\102\105\103\117\114\097\195\167\195\163\111\032\115\195\179\032\110\101\115\116\097\032\115\101\115\115\195\163\111\046", Color3.fromRGB(150, 150, 150))
-else
-if MedalSelectedCount() == 0 then
-MedalSetShopStatus("\109\097\114\113\117\101\032\112\101\108\111\032\109\101\110\111\115\032\117\109\032\105\116\101\109\032\097\110\116\101\115\032\100\101\032\097\116\105\118\097\114\046", Color3.fromRGB(235, 75, 75))
-return
-end
-medalAutoBuyEnabled = true
-local persisted = MedalSaveConfig()
-MedalUpdateToggleButtons()
-MedalStartAutoBuyLoop()
-MedalSetShopStatus(persisted and "\097\117\116\111\032\099\111\109\112\114\097\032\097\116\105\118\097\059\032\099\111\109\112\114\097\114\195\161\032\116\111\100\097\115\032\097\115\032\117\110\105\100\097\100\101\115\032\100\105\115\112\111\110\195\173\118\101\105\115\032\100\111\115\032\105\116\101\110\115\032\109\097\114\099\097\100\111\115\046" or "\097\117\116\111\032\099\111\109\112\114\097\032\097\116\105\118\097\032\110\101\115\116\097\032\115\101\115\115\195\163\111\059\032\119\114\105\116\101\102\105\108\101\032\105\110\100\105\115\112\111\110\195\173\118\101\108\032\112\097\114\097\032\112\101\114\115\105\115\116\105\114\032\097\032\099\111\110\102\105\103\046", Color3.fromRGB(75, 210, 115))
-end
-end)
-
-local function MedalCloseShopAndSave()
-local selectedCount = MedalSelectedCount()
-medalAutoBuyEnabled = selectedCount > 0
-local persisted = MedalSaveConfig()
-MedalUpdateToggleButtons()
-
-medalShopVisible = false
-medalOffersHeader.Visible = false
-medalOffersHeader.Size = UDim2.new(1, -6, 0, 0)
-for _, child in ipairs(medalScroll:GetChildren()) do
-if child.Name == "\077\101\100\097\108\079\102\102\101\114\067\097\114\100" or child.Name == "\077\101\100\097\108\069\109\112\116\121\083\116\097\116\101" then
-child:Destroy()
-end
-end
-
-if medalAutoBuyEnabled then
-MedalStartAutoBuyLoop()
-MedalSetShopStatus(persisted and "\108\111\106\097\032\102\101\099\104\097\100\097\059\032\115\101\108\101\195\167\195\163\111\032\115\097\108\118\097\032\101\032\097\117\116\111\032\099\111\109\112\114\097\032\097\116\105\118\097\100\097\046" or "\108\111\106\097\032\102\101\099\104\097\100\097\059\032\097\117\116\111\032\099\111\109\112\114\097\032\097\116\105\118\097\032\110\101\115\116\097\032\115\101\115\115\195\163\111\044\032\109\097\115\032\111\032\097\114\113\117\105\118\111\032\108\111\099\097\108\032\110\195\163\111\032\101\115\116\195\161\032\100\105\115\112\111\110\195\173\118\101\108\046", Color3.fromRGB(75, 210, 115))
-else
-MedalSetShopStatus(persisted and "\108\111\106\097\032\102\101\099\104\097\100\097\059\032\099\111\110\102\105\103\117\114\097\195\167\195\163\111\032\115\097\108\118\097\044\032\115\101\109\032\105\116\101\110\115\032\115\101\108\101\099\105\111\110\097\100\111\115\046" or "\108\111\106\097\032\102\101\099\104\097\100\097\059\032\115\101\109\032\105\116\101\110\115\032\115\101\108\101\099\105\111\110\097\100\111\115\032\101\032\115\101\109\032\112\101\114\115\105\115\116\195\170\110\099\105\097\032\101\109\032\097\114\113\117\105\118\111\046", Color3.fromRGB(150, 150, 150))
-end
-end
-
-medalCloseButton.Activated:Connect(function()
-playClickSound()
-MedalCloseShopAndSave()
-end)
-
-medalRefreshPassButton.Activated:Connect(function()
-playClickSound()
-MedalRefreshPassState()
-end)
-
-medalClaimPassButton.Activated:Connect(function()
-playClickSound()
-MedalCollectPassAvailable()
-end)
-
-medalAutoPassButton.Activated:Connect(function()
-playClickSound()
-medalAutoPassEnabled = not medalAutoPassEnabled
-MedalSaveConfig()
-MedalUpdateToggleButtons()
-if medalAutoPassEnabled then
-MedalStartAutoPassLoop()
-MedalSetPassStatus("\097\117\116\111\032\099\111\108\101\116\097\032\097\116\105\118\097\059\032\114\101\115\103\097\116\097\032\097\112\101\110\097\115\032\116\105\101\114\115\032\100\101\115\098\108\111\113\117\101\097\100\111\115\046", Color3.fromRGB(75, 210, 115))
-else
-MedalSetPassStatus("\097\117\116\111\032\099\111\108\101\116\097\032\100\101\115\097\116\105\118\097\100\097\046", Color3.fromRGB(150, 150, 150))
-end
-end)
-
-medalTabButton.MouseButton1Click:Connect(function()
-task.defer(MedalRefreshShop)
-end)
-
-if medalShopOpenRemote and medalShopOpenRemote:IsA("\082\101\109\111\116\101\069\118\101\110\116") then
-medalShopOpenRemote.OnClientEvent:Connect(function()
-task.defer(MedalRefreshShop)
-end)
-end
-
-MedalUpdateToggleButtons()
-MedalUpdateSelectionInfo()
-if medalAutoBuyEnabled then MedalStartAutoBuyLoop() end
-
-
-
-
-
-
-
-local medalRaceActive = false
-local medalRaceCycleRunning = false
-local medalRaceConfig = {
-LobbyWait = 10.1,
-Primeiro = Vector3.new(-13369.75, 10.12, 0),
-Peso = Vector3.new(-13802.77, 8.10, 0),
-QuedaBraco = Vector3.new(-14539, 8, -4156),
-Chegada = Vector3.new(-14539, 8, -4158),
-PesoWait = 28,
-ClickDuration = 7,
-ClickInterval = 0.06,
-Descanso = 5,
-}
-
-local medalRaceVirtualInput
-pcall(function()
-medalRaceVirtualInput = game:GetService("\086\105\114\116\117\097\108\073\110\112\117\116\077\097\110\097\103\101\114")
-end)
-
-local medalRaceStatus = MedalLabel(
-"\065\085\084\079\032\082\065\067\069\032\047\047\032\068\069\083\065\084\073\086\065\068\079",
-10000,
-26,
-Color3.fromRGB(155, 155, 155),
-10,
-true
-)
-local medalRaceToggle = MedalButton(
-"\065\085\084\079\032\082\065\067\069\058\032\079\070\070",
-10001,
-Color3.fromRGB(35, 35, 35),
-32
-)
-
-local function MedalRaceSetStatus(message, color)
-if medalRaceStatus and medalRaceStatus.Parent then
-medalRaceStatus.Text = "\065\085\084\079\032\082\065\067\069\032\047\047\032" .. tostring(message)
-medalRaceStatus.TextColor3 = color or Color3.fromRGB(155, 155, 155)
-end
-end
-
-local function MedalRaceUpdateButton()
-if not (medalRaceToggle and medalRaceToggle.Parent) then return end
-medalRaceToggle.Text = "\065\085\084\079\032\082\065\067\069\058\032" .. (medalRaceActive and "\079\078\032\240\159\159\162" or "\079\070\070\032\240\159\148\180")
-medalRaceToggle.BackgroundColor3 = medalRaceActive
-and Color3.fromRGB(30, 105, 50)
-or Color3.fromRGB(35, 35, 35)
-end
-
-local function MedalRaceWait(seconds)
-local deadline = os.clock() + seconds
-while medalRaceActive and os.clock() < deadline do
-task.wait(0.1)
-end
-return medalRaceActive
-end
-
-local function MedalRaceCharacterParts()
-local character = player.Character or player.CharacterAdded:Wait()
-local root = character:WaitForChild("\072\117\109\097\110\111\105\100\082\111\111\116\080\097\114\116", 10)
-local humanoid = character:WaitForChild("\072\117\109\097\110\111\105\100", 10)
-if not root or not humanoid then
-error("\112\101\114\115\111\110\097\103\101\109\032\110\195\163\111\032\099\097\114\114\101\103\111\117\032\097\032\116\101\109\112\111")
-end
-return character, root, humanoid
-end
-
-local function MedalRaceAutoClick(seconds)
-if not medalRaceVirtualInput then
-MedalRaceSetStatus("\086\105\114\116\117\097\108\073\110\112\117\116\077\097\110\097\103\101\114\032\105\110\100\105\115\112\111\110\195\173\118\101\108\032\110\101\115\116\101\032\101\120\101\099\117\116\111\114\046", Color3.fromRGB(235, 75, 75))
-return false
-end
-
-local camera = workspace.CurrentCamera
-local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
-local x, y = 42, 58
-if viewport.X < 500 then
-x, y = 32, 48
-end
-
-local deadline = os.clock() + seconds
-while medalRaceActive and os.clock() < deadline do
-pcall(function()
-medalRaceVirtualInput:SendMouseButtonEvent(x, y, 0, true, game, 1)
-end)
-task.wait(0.03)
-pcall(function()
-medalRaceVirtualInput:SendMouseButtonEvent(x, y, 0, false, game, 1)
-end)
-task.wait(medalRaceConfig.ClickInterval)
-end
-
-pcall(function()
-medalRaceVirtualInput:SendMouseButtonEvent(x, y, 0, false, game, 1)
-end)
-return medalRaceActive
-end
-
-local function MedalRaceExecute()
-local ok, err = pcall(function()
-local _, root, humanoid = MedalRaceCharacterParts()
-local gym = workspace:WaitForChild("\083\116\114\111\110\103\098\108\111\120\105\097\110\071\121\109", 10)
-if not gym then error("\083\116\114\111\110\103\098\108\111\120\105\097\110\071\121\109\032\110\195\163\111\032\101\110\099\111\110\116\114\097\100\111") end
-local lobby = gym:WaitForChild("\076\111\098\098\121", 10)
-local markers = lobby and lobby:WaitForChild("\077\097\114\107\101\114\115", 10)
-local raceWall = markers and markers:WaitForChild("\082\097\099\101\087\097\108\108", 10)
-if not raceWall then error("\082\097\099\101\087\097\108\108\032\110\195\163\111\032\101\110\099\111\110\116\114\097\100\111") end
-if not medalRaceActive then return end
-
-
-if raceWall:IsA("\066\097\115\101\080\097\114\116") then
-root.CFrame = raceWall.CFrame
-elseif raceWall:IsA("\077\111\100\101\108") then
-root.CFrame = raceWall:GetPivot()
-else
-error("\082\097\099\101\087\097\108\108\032\110\195\163\111\032\195\169\032\066\097\115\101\080\097\114\116\032\110\101\109\032\077\111\100\101\108")
-end
-
-
-if not MedalRaceWait(medalRaceConfig.LobbyWait) then return end
-local spawnZ = root.Position.Z
-
-
-root.CFrame = CFrame.new(
-medalRaceConfig.Primeiro.X,
-medalRaceConfig.Primeiro.Y,
-spawnZ
-)
-if not MedalRaceWait(1) then return end
-
-
-local peso = Vector3.new(
-medalRaceConfig.Peso.X,
-medalRaceConfig.Peso.Y,
-spawnZ
-)
-root.CFrame = CFrame.new(peso)
-
-
-local deadline = os.clock() + medalRaceConfig.PesoWait
-while medalRaceActive and os.clock() < deadline do
-if not root.Parent then return end
-root.CFrame = CFrame.new(peso)
-task.wait(1)
-end
-if not medalRaceActive then return end
-
-
-for _ = 1, 2 do
-if not medalRaceActive then return end
-humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-task.wait(0.3)
-end
-
-
-if not MedalRaceAutoClick(medalRaceConfig.ClickDuration) then return end
-
-
-root.CFrame = CFrame.new(medalRaceConfig.QuedaBraco)
-if not MedalRaceWait(3) then return end
-
-
-if not MedalRaceAutoClick(medalRaceConfig.ClickDuration) then return end
-
-
-root.CFrame = CFrame.new(medalRaceConfig.Chegada)
-if MedalRaceWait(0.5) then
-MedalRaceSetStatus("\099\105\099\108\111\032\099\111\110\099\108\117\195\173\100\111\059\032\097\103\117\097\114\100\097\110\100\111\032\112\114\195\179\120\105\109\111\046", Color3.fromRGB(75, 210, 115))
-end
-end)
-
-if not ok then
-MedalRaceSetStatus("\101\114\114\111\058\032" .. tostring(err), Color3.fromRGB(235, 75, 75))
-warn("\091\065\114\097\115\097\107\097\093\091\077\101\100\097\108\032\065\117\116\111\032\082\097\099\101\093\032" .. tostring(err))
-end
-end
-
-local function MedalRaceStop()
-medalRaceActive = false
-MedalRaceUpdateButton()
-MedalRaceSetStatus("\100\101\115\097\116\105\118\097\100\111\046", Color3.fromRGB(155, 155, 155))
-if medalRaceVirtualInput then
-pcall(function()
-local camera = workspace.CurrentCamera
-local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
-local x, y = 42, 58
-if viewport.X < 500 then x, y = 32, 48 end
-medalRaceVirtualInput:SendMouseButtonEvent(x, y, 0, false, game, 1)
-end)
-end
-end
-
-medalRaceToggle.Activated:Connect(function()
-playClickSound()
-medalRaceActive = not medalRaceActive
-MedalRaceUpdateButton()
-
-if not medalRaceActive then
-MedalRaceStop()
-return
-end
-
-MedalRaceSetStatus("\105\110\105\099\105\097\110\100\111\032\099\105\099\108\111\046\046\046", Color3.fromRGB(75, 210, 115))
-if medalRaceCycleRunning then return end
-
-medalRaceCycleRunning = true
-task.spawn(function()
-while medalRaceActive and Core:IsAlive() do
-MedalRaceExecute()
-if medalRaceActive then
-MedalRaceSetStatus("\100\101\115\099\097\110\115\097\110\100\111\032" .. tostring(medalRaceConfig.Descanso) .. "\115\046", Color3.fromRGB(200, 160, 70))
-MedalRaceWait(medalRaceConfig.Descanso)
-end
-end
-medalRaceCycleRunning = false
-if not medalRaceActive then
-MedalRaceSetStatus("\100\101\115\097\116\105\118\097\100\111\046", Color3.fromRGB(155, 155, 155))
-end
-end)
-end)
-
-
-tabMedal.Destroying:Connect(MedalRaceStop)
-
-local medalAlertsStarted = Core:StartMedalAlertMonitor(MedalGetShopState, function()
-return not medalShopBusy and not MedalIsRateLimited() and not medalAutoBuyEnabled
-end, function(message)
-if medalAlertStatus.Parent then medalAlertStatus.Text = message end
-end)
-Core:StartWorker("\077\101\100\097\108\046\083\104\111\112\065\117\116\111\082\101\102\114\101\115\104", function(isAlive)
-while isAlive() do
-task.wait(60)
-if not isAlive() then break end
-
-if not medalAlertsStarted and not medalAutoBuyEnabled and not medalShopBusy and not MedalIsRateLimited() then
-while medalShopBusy and isAlive() do task.wait(1) end
-if isAlive() and not medalAutoBuyEnabled and not MedalIsRateLimited() then
-local ok, err = pcall(MedalAutoRefreshShop)
-if not ok then
-medalShopBusy = false
-if medalShopVisible then
-MedalSetShopStatus("\101\114\114\111\032\110\097\032\097\116\117\097\108\105\122\097\195\167\195\163\111\032\097\117\116\111\109\195\161\116\105\099\097\058\032" .. tostring(err), Color3.fromRGB(235, 75, 75))
-end
-end
-end
-end
-end
-end)
-end
-
 function UI:Start()
 Core:AddCleanup("\085\073", function()
 Core:SetBossInverted("\078\111\114\109\097\108", false)
-Core:SetBossInverted("\072\097\108\108\111\119\101\101\110", false)
 end)
 Core:AddCleanup("\085\073", function() ArasakaI18n:Stop() end)
 local startTime = os.time()
@@ -5941,958 +4610,12 @@ local tabInicio = CriarAba("\073\110\195\173\099\105\111", "\073\078\073\067\073
 local tabFarmForca = CriarAba("\070\097\114\109\032\070\111\114\195\167\097", "\070\065\082\077\032\070\079\082\067\065")
 local tabFarmRebirth = CriarAba("\070\097\114\109\032\082\101\098\105\114\116\104", "\070\065\082\077\032\082\069\066\073\082\084\072")
 local tabFarmBoss = CriarAba("\070\097\114\109\032\066\111\115\115", "\070\065\082\077\032\066\079\083\083")
-CriarAba("\077\101\100\097\108", "\077\069\068\065\076")
-local tabHalloween = CriarAba("\072\097\108\108\111\119\101\101\110", "\072\065\076\076\079\087\069\069\078")
 local tabEnchant = CriarAba("\069\110\099\097\110\116\097\109\101\110\116\111\115", "\069\078\067\065\078\084\065\077\069\078\084\079\083")
 local tabTeleports = CriarAba("\084\101\108\101\112\111\114\116\101\115", "\084\069\076\069\080\079\082\084\069\083")
 local tabPets = CriarAba("\080\101\116\115", "\080\069\084\083")
 local tabVisual = CriarAba("\086\105\115\117\097\108", "\086\073\083\085\065\076")
 UI:BuildArasakaStyles(tabVisual)
 local tabOutros = CriarAba("\079\117\116\114\111\115", "\079\085\084\082\079\083")
-do
-local HWINames = {"\070\114\097\110\107\101\110\098\114\117\116\101", "\080\117\109\112\107\105\110\032\084\105\116\097\110", "\071\114\105\109\032\082\101\097\112\101\114", "\083\099\097\114\101\099\114\111\119\032\067\111\108\111\115\115\117\115"}
-local HWProfiles = {
-["\070\114\097\110\107\101\110\098\114\117\116\101"] = true,
-["\080\117\109\112\107\105\110\032\084\105\116\097\110"] = true,
-["\071\114\105\109\032\082\101\097\112\101\114"] = true,
-["\083\099\097\114\101\099\114\111\119\032\067\111\108\111\115\115\117\115"] = true
-}
-local HWState = {
-enabled = false, selected = {}, origin = nil, savedTool = nil,
-target = nil, returning = false, generation = 0,
-altitude = 65,
-}
-for _, name in ipairs(HWINames) do HWState.selected[name] = true end
-local HWWrap = Instance.new("\083\099\114\111\108\108\105\110\103\070\114\097\109\101", tabHalloween)
-HWWrap.Name = "\072\097\108\108\111\119\101\101\110\066\111\115\115\076\105\115\116"
-HWWrap.Position = UDim2.fromOffset(10, 10)
-HWWrap.Size = UDim2.new(1, -20, 1, -20)
-HWWrap.BackgroundTransparency = 1
-HWWrap.BorderSizePixel = 0
-HWWrap.ScrollBarThickness = 4
-HWWrap.ScrollingDirection = Enum.ScrollingDirection.Y
-HWWrap.Active = true
-HWWrap.ScrollingEnabled = true
-HWWrap.ElasticBehavior = Enum.ElasticBehavior.Never
-HWWrap.AutomaticCanvasSize = Enum.AutomaticSize.Y
-local HWLayout = Instance.new("\085\073\076\105\115\116\076\097\121\111\117\116", HWWrap)
-HWLayout.Padding = UDim.new(0, 9)
-HWLayout.SortOrder = Enum.SortOrder.LayoutOrder
-Core:TrackConnection("\085\073", HWLayout:GetPropertyChangedSignal("\065\098\115\111\108\117\116\101\067\111\110\116\101\110\116\083\105\122\101"):Connect(function()
-HWWrap.CanvasSize = UDim2.fromOffset(0, HWLayout.AbsoluteContentSize.Y + math.max(48, HWWrap.AbsoluteSize.Y * 0.12))
-end))
-local function hwText(str, size, height, color)
-local label = Instance.new("\084\101\120\116\076\097\098\101\108", HWWrap)
-label.Size = UDim2.new(1, -8, 0, height)
-label.BackgroundTransparency = 1
-label.Text = str
-label.TextSize = size
-label.Font = Enum.Font.GothamBold
-label.TextColor3 = color or Color3.fromRGB(245, 235, 235)
-label.TextWrapped = true
-label.TextXAlignment = Enum.TextXAlignment.Left
-return label
-end
-local function hwButton(str)
-local button = Instance.new("\084\101\120\116\066\117\116\116\111\110", HWWrap)
-button.Size = UDim2.new(1, -8, 0, 48)
-button.BackgroundColor3 = Color3.fromRGB(28, 18, 20)
-button.BorderSizePixel = 0
-button.TextColor3 = Color3.fromRGB(242, 242, 242)
-button.Text = str
-button.TextSize = 14
-button.Font = Enum.Font.GothamBold
-button.TextWrapped = true
-Instance.new("\085\073\067\111\114\110\101\114", button).CornerRadius = UDim.new(0, 7)
-return button
-end
-hwText("\240\159\142\131\032\072\065\076\076\079\087\069\069\078\032\047\047\032\069\086\069\078\084\079", 17, 36, Color3.fromRGB(255, 126, 63))
-hwText("\052\032\066\079\083\083\069\083\032\226\128\162\032\065\076\084\085\082\065\032\073\078\073\067\073\065\076\032\054\053\032\226\128\162\032\072\065\076\076\079\087\069\068\032\120\049\048", 11, 42, Color3.fromRGB(194, 178, 172))
-local function openHalloweenShop()
-local Players = game:GetService("\080\108\097\121\101\114\115")
-local ReplicatedStorage = game:GetService("\082\101\112\108\105\099\097\116\101\100\083\116\111\114\097\103\101")
-local player = Players.LocalPlayer
-local env = getgenv and getgenv() or _G
-if type(env.ArasakaHalloweenStop) == "\102\117\110\099\116\105\111\110" then
-pcall(env.ArasakaHalloweenStop)
-end
-local names = {"\072\097\117\110\116\101\100\032\076\097\110\116\101\114\110", "\067\097\110\100\121\032\067\117\098\101", "\067\117\114\115\101\100\032\067\097\110\100\108\101", "\074\097\099\107\039\111\032\066\108\111\099\107", "\066\111\110\101\032\066\108\111\099\107", "\067\111\102\102\105\110\032\067\114\097\119\108\101\114"}
-local probabilities = {"\052\048\037", "\050\053\037", "\049\056\037", "\049\048\037", "\054\037", "\049\037"}
-local aliases = { ["\074\097\099\107\032\111\032\066\108\111\099\107"] = "\074\097\099\107\039\111\032\066\108\111\099\107", ["\074\097\099\107\045\111\045\066\108\111\099\107"] = "\074\097\099\107\039\111\032\066\108\111\099\107", ["\074\097\099\107\032\079\032\066\108\111\099\107"] = "\074\097\099\107\039\111\032\066\108\111\099\107" }
-local decisions = {}
-local imageCache = {}
-local observed = {}
-local selected = 1
-local openEnabled = false
-local sellEnabled = false
-local evolveEnabled = false
-local alive = true
-local busy = false
-local connections = {}
-local counters = {opened = 0, sold = 0}
-local folder = player:WaitForChild("\112\101\116\115\070\111\108\100\101\114", 10)
-local remotes = ReplicatedStorage:WaitForChild("\114\069\118\101\110\116\115", 10)
-local openRemote = remotes and remotes:FindFirstChild("\111\112\101\110\067\114\121\115\116\097\108\082\101\109\111\116\101")
-local sellRemote = remotes and remotes:FindFirstChild("\115\101\108\108\080\101\116\069\118\101\110\116")
-local evolveRemote = remotes and remotes:FindFirstChild("\112\101\116\069\118\111\108\118\101\069\118\101\110\116")
-local function cleanName(s)
-return aliases[s] or s
-end
-local function imageFor(name)
-if imageCache[name] then return imageCache[name] end
-if not folder then return "" end
-for _, rarity in ipairs(folder:GetChildren()) do
-for _, pet in ipairs(rarity:GetChildren()) do
-if cleanName(pet.Name) == name and pet:IsA("\083\116\114\105\110\103\086\097\108\117\101") and pet.Value:match("\094\114\098\120\097\115\115\101\116\105\100\058\047\047\037\100\043\036") then
-imageCache[name] = pet.Value
-return pet.Value
-end
-end
-end
-return ""
-end
-local function markCurrent()
-if not folder then return end
-for _, rarity in ipairs(folder:GetChildren()) do
-for _, pet in ipairs(rarity:GetChildren()) do
-observed[pet] = true
-end
-end
-end
-markCurrent()
-local parent = gethui and gethui() or player:WaitForChild("\080\108\097\121\101\114\071\117\105")
-local gui = Instance.new("\083\099\114\101\101\110\071\117\105")
-gui.Name = "\065\114\097\115\097\107\097\072\097\108\108\111\119\101\101\110\065\117\116\111\083\101\108\108\084\101\115\116"
-gui.ResetOnSpawn = false
-gui.IgnoreGuiInset = true
-gui.Parent = parent
-local function round(target, radius)
-local c = Instance.new("\085\073\067\111\114\110\101\114")
-c.CornerRadius = UDim.new(0, radius)
-c.Parent = target
-end
-local function makeText(parentObj, value, x, y, w, h, size, bold)
-local obj = Instance.new("\084\101\120\116\076\097\098\101\108")
-obj.BackgroundTransparency = 1
-obj.Text = value
-obj.TextColor3 = Color3.fromRGB(245, 245, 250)
-obj.TextSize = size
-obj.Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham
-obj.TextWrapped = true
-obj.Size = UDim2.fromOffset(w, h)
-obj.Position = UDim2.fromOffset(x, y)
-obj.Parent = parentObj
-return obj
-end
-local function makeButton(parentObj, value, x, y, w, h, color)
-local obj = Instance.new("\084\101\120\116\066\117\116\116\111\110")
-obj.Text = value
-obj.TextColor3 = Color3.fromRGB(255, 255, 255)
-obj.TextSize = 13
-obj.Font = Enum.Font.GothamBold
-obj.BackgroundColor3 = color
-obj.BorderSizePixel = 0
-obj.Size = UDim2.fromOffset(w, h)
-obj.Position = UDim2.fromOffset(x, y)
-obj.Parent = parentObj
-round(obj, 8)
-return obj
-end
-local main = Instance.new("\070\114\097\109\101")
-main.Size = UDim2.fromOffset(408, 472)
-main.Position = UDim2.new(0.5, -204, 0.5, -236)
-main.BackgroundColor3 = Color3.fromRGB(12, 16, 24)
-main.BorderSizePixel = 0
-main.Active = true
-main.Draggable = true
-main.Parent = gui
-round(main, 8)
-local border = Instance.new("\085\073\083\116\114\111\107\101", main)
-border.Color = Color3.fromRGB(125, 30, 43)
-border.Thickness = 1
-local topStripe = Instance.new("\070\114\097\109\101", main)
-topStripe.Size = UDim2.new(1, 0, 0, 3)
-topStripe.BackgroundColor3 = Color3.fromRGB(236, 64, 88)
-topStripe.BorderSizePixel = 0
-makeText(main, "\065\082\065\083\065\075\065\032\047\047\032\072\065\076\076\079\087\069\069\078", 12, 9, 345, 26, 14, true)
-local close = makeButton(main, "\088", 372, 7, 26, 26, Color3.fromRGB(104, 42, 56))
-local subtitle = makeText(main, "\069\083\067\079\076\072\065\032\079\032\068\069\083\084\073\078\079\032\068\079\083\032\080\069\084\083", 12, 34, 376, 17, 10, false)
-subtitle.TextColor3 = Color3.fromRGB(184, 188, 204)
-local gridHolder = Instance.new("\070\114\097\109\101")
-gridHolder.Size = UDim2.fromOffset(384, 205)
-gridHolder.Position = UDim2.fromOffset(12, 57)
-gridHolder.BackgroundTransparency = 1
-gridHolder.Parent = main
-local layout = Instance.new("\085\073\071\114\105\100\076\097\121\111\117\116")
-layout.CellSize = UDim2.fromOffset(122, 98)
-layout.CellPadding = UDim2.fromOffset(9, 9)
-layout.SortOrder = Enum.SortOrder.LayoutOrder
-layout.Parent = gridHolder
-local cards = {}
-for i, name in ipairs(names) do
-local card = Instance.new("\084\101\120\116\066\117\116\116\111\110")
-card.Name = "\080\101\116\067\097\114\100" .. i
-card.Text = ""
-card.AutoButtonColor = false
-card.LayoutOrder = i
-card.BackgroundColor3 = Color3.fromRGB(56, 58, 74)
-card.BorderSizePixel = 0
-card.Parent = gridHolder
-round(card, 9)
-local stroke = Instance.new("\085\073\083\116\114\111\107\101")
-stroke.Thickness = 1.3
-stroke.Color = Color3.fromRGB(95, 99, 115)
-stroke.Parent = card
-local image = Instance.new("\073\109\097\103\101\076\097\098\101\108")
-image.BackgroundTransparency = 1
-image.Position = UDim2.fromOffset(33, 4)
-image.Size = UDim2.fromOffset(56, 56)
-image.ScaleType = Enum.ScaleType.Fit
-image.Image = imageFor(name)
-image.Parent = card
-local txt = makeText(card, name, 3, 61, 116, 24, 10, true)
-txt.TextYAlignment = Enum.TextYAlignment.Center
-local odds = makeText(card, probabilities[i], 3, 85, 116, 12, 9, false)
-odds.TextColor3 = Color3.fromRGB(230, 235, 246)
-cards[i] = {button = card, image = image, stroke = stroke}
-card.MouseButton1Click:Connect(function()
-selected = i
-if env.ArasakaHalloweenRefresh then env.ArasakaHalloweenRefresh() end
-end)
-end
-local selectedName = makeText(main, "\072\097\117\110\116\101\100\032\076\097\110\116\101\114\110", 12, 264, 384, 21, 12, true)
-selectedName.TextXAlignment = Enum.TextXAlignment.Center
-local keep = makeButton(main, "\077\065\078\084\069\082", 12, 290, 186, 31, Color3.fromRGB(34, 131, 80))
-local exclude = makeButton(main, "\069\088\067\076\085\073\082", 210, 290, 186, 31, Color3.fromRGB(167, 56, 62))
-local autoOpen = makeButton(main, "\065\066\082\073\082\032\120\049\048\058\032\068\069\083\076\073\071\065\068\079", 12, 329, 186, 32, Color3.fromRGB(49, 54, 78))
-local autoSell = makeButton(main, "\086\069\078\068\065\058\032\068\069\083\076\073\071\065\068\065", 210, 329, 186, 32, Color3.fromRGB(49, 54, 78))
-local autoEvolve = makeButton(main, "\069\086\079\076\085\073\082\058\032\068\069\083\076\073\071\065\068\079", 12, 367, 384, 32, Color3.fromRGB(49, 54, 78))
-local refresh = makeButton(main, "\065\084\085\065\076\073\090\065\082\032\073\077\065\071\069\078\083", 12, 407, 145, 29, Color3.fromRGB(43, 76, 130))
-local status = makeText(main, "\078\101\110\104\117\109\032\112\101\116\032\115\101\114\195\161\032\118\101\110\100\105\100\111\032\097\116\195\169\032\118\111\099\195\170\032\109\097\114\099\097\114\032\069\088\067\076\085\073\082\046", 162, 401, 233, 54, 10, false)
-status.TextColor3 = Color3.fromRGB(192, 198, 217)
-local function updateUI()
-selectedName.Text = names[selected]
-for i, name in ipairs(names) do
-local option = decisions[name]
-cards[i].button.BackgroundColor3 = option == "\115\101\108\108" and Color3.fromRGB(169, 42, 55) or Color3.fromRGB(31, 112, 69)
-cards[i].stroke.Color = i == selected and Color3.new(1, 1, 1) or Color3.fromRGB(77, 81, 100)
-cards[i].stroke.Thickness = i == selected and 2.8 or 1
-end
-autoOpen.Text = "\065\066\082\073\082\032\120\049\048\058\032" .. (openEnabled and "\076\073\071\065\068\079" or "\068\069\083\076\073\071\065\068\079")
-autoSell.Text = "\086\069\078\068\065\058\032" .. (sellEnabled and "\076\073\071\065\068\065" or "\068\069\083\076\073\071\065\068\065")
-autoEvolve.Text = "\069\086\079\076\085\073\082\058\032" .. (evolveEnabled and "\076\073\071\065\068\079" or "\068\069\083\076\073\071\065\068\079")
-autoEvolve.BackgroundColor3 = evolveEnabled and Color3.fromRGB(24, 128, 75) or Color3.fromRGB(49, 54, 78)
-autoOpen.BackgroundColor3 = openEnabled and Color3.fromRGB(24, 128, 75) or Color3.fromRGB(49, 54, 78)
-autoSell.BackgroundColor3 = sellEnabled and Color3.fromRGB(24, 128, 75) or Color3.fromRGB(49, 54, 78)
-end
-env.ArasakaHalloweenRefresh = updateUI
-keep.MouseButton1Click:Connect(function()
-decisions[names[selected]] = "\107\101\101\112"
-updateUI()
-end)
-exclude.MouseButton1Click:Connect(function()
-decisions[names[selected]] = "\115\101\108\108"
-updateUI()
-end)
-refresh.MouseButton1Click:Connect(function()
-imageCache = {}
-for i, name in ipairs(names) do
-cards[i].image.Image = imageFor(name)
-end
-status.Text = "\073\109\097\103\101\110\115\032\097\116\117\097\108\105\122\097\100\097\115\032\097\032\112\097\114\116\105\114\032\100\111\115\032\112\101\116\115\032\100\105\115\112\111\110\195\173\118\101\105\115\032\110\111\032\105\110\118\101\110\116\195\161\114\105\111\046"
-end)
-autoOpen.MouseButton1Click:Connect(function()
-if not openRemote or not openRemote:IsA("\082\101\109\111\116\101\070\117\110\099\116\105\111\110") then
-status.Text = "\111\112\101\110\067\114\121\115\116\097\108\082\101\109\111\116\101\032\105\110\100\105\115\112\111\110\195\173\118\101\108\046"
-return
-end
-openEnabled = not openEnabled
-updateUI()
-end)
-autoSell.MouseButton1Click:Connect(function()
-if not sellRemote or not sellRemote:IsA("\082\101\109\111\116\101\069\118\101\110\116") or not folder then
-status.Text = "\115\101\108\108\080\101\116\069\118\101\110\116\032\111\117\032\105\110\118\101\110\116\195\161\114\105\111\032\105\110\100\105\115\112\111\110\195\173\118\101\108\046"
-return
-end
-sellEnabled = not sellEnabled
-updateUI()
-end)
-autoEvolve.MouseButton1Click:Connect(function()
-if not evolveRemote or not evolveRemote:IsA("\082\101\109\111\116\101\069\118\101\110\116") or not folder then
-status.Text = "\112\101\116\069\118\111\108\118\101\069\118\101\110\116\032\111\117\032\105\110\118\101\110\116\195\161\114\105\111\032\105\110\100\105\115\112\111\110\195\173\118\101\108\046"
-return
-end
-evolveEnabled = not evolveEnabled
-status.Text = evolveEnabled and "\065\117\116\111\032\069\118\111\108\117\105\114\032\097\116\105\118\097\100\111\032\112\097\114\097\032\111\032\105\110\118\101\110\116\195\161\114\105\111\046" or "\065\117\116\111\032\069\118\111\108\118\101\032\100\101\115\108\105\103\097\100\111\046"
-updateUI()
-end)
-local function eventCounts()
-local counts = {}
-if not folder then return counts end
-for _, rarity in ipairs(folder:GetChildren()) do
-if rarity:IsA("\070\111\108\100\101\114") then
-for _, pet in ipairs(rarity:GetChildren()) do
-if pet:IsA("\083\116\114\105\110\103\086\097\108\117\101") then
-local name = cleanName(pet.Name)
-for _, allowed in ipairs(names) do
-if allowed == name then
-counts[name] = (counts[name] or 0) + 1
-break
-end
-end
-end
-end
-end
-end
-return counts
-end
-local function inventoryTypes()
-local types = {}
-if not folder then return types end
-for _, category in ipairs(folder:GetChildren()) do
-if category:IsA("\070\111\108\100\101\114") then
-for _, pet in ipairs(category:GetChildren()) do
-if pet:IsA("\083\116\114\105\110\103\086\097\108\117\101") then
-types[pet.Name] = (types[pet.Name] or 0) + 1
-end
-end
-end
-end
-return types
-end
-local function evolveWorker()
-local unsuccessful = 0
-local previous = 0
-while alive do
-if not evolveEnabled or not folder or not evolveRemote then
-task.wait(0.5)
-else
-local before = inventoryTypes()
-local checked = 0
-local improved = false
-for name, quantity in pairs(before) do
-if not alive or not evolveEnabled then break end
-if quantity >= 2 then
-checked += 1
-pcall(function() evolveRemote:FireServer("\101\118\111\108\118\101\080\101\116", name) end)
-task.wait(0.5)
-local after = inventoryTypes()
-if (after[name] or 0) ~= quantity then
-improved = true
-end
-end
-end
-if improved then
-unsuccessful = 0
-previous = 0
-status.Text = "\069\118\111\108\117\195\167\195\163\111\032\100\101\116\101\099\116\097\100\097\059\032\105\110\116\101\114\118\097\108\111\032\114\101\105\110\105\099\105\097\100\111\046"
-else
-unsuccessful += 1
-if unsuccessful >= 2 then
-previous = math.min(600, (unsuccessful - 1) * 60)
-end
-status.Text = "\078\101\110\104\117\109\097\032\101\118\111\108\117\195\167\195\163\111\032\099\111\110\102\105\114\109\097\100\097\046\032\080\114\195\179\120\105\109\097\032\118\101\114\105\102\105\099\097\195\167\195\163\111\058\032" .. math.floor(previous / 60) .. "\032\109\105\110"
-end
-local elapsed = 0
-repeat
-task.wait(1)
-elapsed += 1
-until elapsed >= math.max(2, previous) or not alive or not evolveEnabled
-end
-end
-end
-task.spawn(evolveWorker)
-local function inspectNew(pet)
-if not alive or observed[pet] then return end
-observed[pet] = true
-if not pet:IsA("\083\116\114\105\110\103\086\097\108\117\101") then return end
-local name = cleanName(pet.Name)
-if pet.Value:match("\094\114\098\120\097\115\115\101\116\105\100\058\047\047\037\100\043\036") and not imageCache[name] then
-imageCache[name] = pet.Value
-for i, known in ipairs(names) do
-if known == name then cards[i].image.Image = pet.Value end
-end
-end
-if not sellEnabled or decisions[name] ~= "\115\101\108\108" then return end
-if not sellRemote or not pet:IsDescendantOf(folder) then return end
-task.defer(function()
-if not alive or not sellEnabled or not pet:IsDescendantOf(folder) then return end
-local ok, err = pcall(function()
-sellRemote:FireServer("\115\101\108\108\080\101\116", pet)
-end)
-if ok then
-counters.sold = counters.sold + 1
-status.Text = "\086\101\110\100\097\032\115\111\108\105\099\105\116\097\100\097\058\032" .. name .. "\032\040" .. counters.sold .. "\041"
-else
-status.Text = "\070\097\108\104\097\032\097\111\032\115\111\108\105\099\105\116\097\114\032\118\101\110\100\097\058\032" .. tostring(err)
-end
-end)
-end
-local function watchCategory(rarity)
-if not rarity:IsA("\070\111\108\100\101\114") then return end
-for _, pet in ipairs(rarity:GetChildren()) do observed[pet] = true end
-table.insert(connections, rarity.ChildAdded:Connect(inspectNew))
-end
-if folder then
-for _, rarity in ipairs(folder:GetChildren()) do watchCategory(rarity) end
-table.insert(connections, folder.ChildAdded:Connect(watchCategory))
-end
-local loopThread = task.spawn(function()
-while alive do
-if openEnabled and not busy then
-busy = true
-local ok, result = pcall(function()
-return openRemote:InvokeServer("\111\112\101\110\067\114\121\115\116\097\108\066\117\108\107", "\072\097\108\108\111\119\101\100\032\067\114\121\115\116\097\108", 10)
-end)
-if not alive then break end
-if ok then
-counters.opened = counters.opened + 1
-status.Text = "\065\098\101\114\116\117\114\097\032\120\049\048\032\115\111\108\105\099\105\116\097\100\097\032\040" .. counters.opened .. "\041\046"
-else
-openEnabled = false
-status.Text = "\065\098\101\114\116\117\114\097\032\102\097\108\104\111\117\058\032" .. tostring(result)
-updateUI()
-end
-busy = false
-end
-task.wait(1.6)
-end
-end)
-local function stop()
-if not alive then return end
-alive = false
-openEnabled = false
-sellEnabled = false
-evolveEnabled = false
-for _, conn in ipairs(connections) do conn:Disconnect() end
-table.clear(connections)
-env.ArasakaHalloweenRefresh = nil
-env.ArasakaHalloweenStop = nil
-if gui.Parent then gui:Destroy() end
-end
-close.MouseButton1Click:Connect(stop)
-env.ArasakaHalloweenStop = stop
-updateUI()
-print("\091\065\082\065\083\065\075\065\093\032\072\097\108\108\111\119\101\101\110\032\065\117\116\111\032\079\112\101\110\032\047\032\065\117\116\111\032\083\101\108\108\032\047\032\065\117\116\111\032\069\118\111\108\118\101\032\116\101\115\116\101\032\112\114\111\110\116\111")
-end
-local hwShopButton = hwButton("\240\159\142\131\032\076\079\074\065\032\086\073\083\085\065\076\032\068\079\032\072\065\076\076\079\087\069\069\078")
-hwShopButton.MouseButton1Click:Connect(openHalloweenShop)
-local crystalActive, crystalSerial = false, 0
-local crystalStatus = hwText("\072\097\108\108\111\119\101\100\032\067\114\121\115\116\097\108\032\120\049\048\032\112\114\111\110\116\111\046", 11, 42, Color3.fromRGB(230,190,190))
-local crystalOpenOnce = hwButton("\065\066\082\073\082\032\072\065\076\076\079\087\069\068\032\067\082\089\083\084\065\076\032\120\049\048\032\047\047\032\085\077\065\032\086\069\090")
-local crystalAutoOpen = hwButton("\065\085\084\079\032\065\066\082\073\082\032\072\065\076\076\079\087\069\068\032\120\049\048\058\032\079\070\070")
-local function getCrystalRemote()
-local events = ReplicatedStorage:FindFirstChild("\114\069\118\101\110\116\115")
-local remote = events and events:FindFirstChild("\111\112\101\110\067\114\121\115\116\097\108\082\101\109\111\116\101")
-return remote and remote:IsA("\082\101\109\111\116\101\070\117\110\099\116\105\111\110") and remote or nil
-end
-local function openHallowed()
-local remote=getCrystalRemote()
-if not remote then return false,"\111\112\101\110\067\114\121\115\116\097\108\082\101\109\111\116\101\032\105\110\100\105\115\112\111\110\195\173\118\101\108\046" end
-local ok,result=pcall(function()
-return remote:InvokeServer("\111\112\101\110\067\114\121\115\116\097\108\066\117\108\107","\072\097\108\108\111\119\101\100\032\067\114\121\115\116\097\108",10)
-end)
-if not ok then return false,"\069\114\114\111\032\110\111\032\073\110\118\111\107\101\083\101\114\118\101\114\058\032"..tostring(result) end
-if result == false then return false,"\083\101\114\118\105\100\111\114\032\114\101\099\117\115\111\117\032\097\098\101\114\116\117\114\097\032\120\049\048\046" end
-if type(result)=="\116\097\098\108\101" then
-if result.Ok==false or result.Success==false then
-return false,"\065\098\101\114\116\117\114\097\032\114\101\099\117\115\097\100\097\058\032"..tostring(result.Reason or result.Message or result.Error or "\115\101\109\032\109\111\116\105\118\111\032\105\110\102\111\114\109\097\100\111")
-end
-end
-return true,"\065\098\101\114\116\117\114\097\032\072\097\108\108\111\119\101\100\032\120\049\048\032\101\110\118\105\097\100\097\059\032\099\111\110\102\105\114\097\032\111\032\114\101\115\117\108\116\097\100\111\032\110\111\032\106\111\103\111\046"
-end
-crystalOpenOnce.MouseButton1Click:Connect(function()
-local _,msg=openHallowed()
-crystalStatus.Text=msg
-end)
-crystalAutoOpen.MouseButton1Click:Connect(function()
-crystalActive=not crystalActive
-crystalSerial+=1
-local id=crystalSerial
-crystalAutoOpen.Text="\065\085\084\079\032\065\066\082\073\082\032\072\065\076\076\079\087\069\068\032\120\049\048\058\032"..(crystalActive and "\079\078" or "\079\070\070")
-crystalAutoOpen.BackgroundColor3=crystalActive and Color3.fromRGB(125,32,43) or Color3.fromRGB(28,18,20)
-if crystalActive then
-task.spawn(function()
-while crystalActive and id==crystalSerial and Core:IsAlive() do
-local ok,msg=openHallowed()
-crystalStatus.Text=msg
-if not ok then
-crystalActive=false
-crystalAutoOpen.Text="\065\085\084\079\032\065\066\082\073\082\032\072\065\076\076\079\087\069\068\032\120\049\048\058\032\079\070\070"
-break
-end
-task.wait(1)
-end
-end)
-end
-end)
-Core:AddCleanup("\085\073",function()
-crystalActive=false
-crystalSerial+=1
-end)
-hwText("\240\159\142\129\032\080\065\083\083\069\032\068\069\032\072\065\076\076\079\087\069\069\078", 15, 34, Color3.fromRGB(255,160,90))
-local PASS_WORKER = "\071\114\097\116\105\115\086\050\052\046\065\117\116\111\072\097\108\108\111\119\101\101\110\080\097\115\115"
-local passEnabled = false
-local btnHalloweenPass = hwButton("\065\085\084\079\032\067\079\076\069\084\065\082\032\080\065\083\083\069\032\240\159\142\131\058\032\079\070\070\032\240\159\148\180")
-local function refreshPassButton()
-btnHalloweenPass.Text = "\065\085\084\079\032\067\079\076\069\084\065\082\032\080\065\083\083\069\032\240\159\142\131\058\032" .. (passEnabled and "\079\078\032\240\159\159\162" or "\079\070\070\032\240\159\148\180")
-btnHalloweenPass.BackgroundColor3 = passEnabled and Color3.fromRGB(35, 93, 56) or Color3.fromRGB(64, 26, 31)
-end
-refreshPassButton()
-local function getPassRemote()
-local events = ReplicatedStorage:FindFirstChild("\114\069\118\101\110\116\115")
-local remote = events and events:FindFirstChild("\104\097\108\108\111\119\101\101\110\080\097\115\115\082\101\109\111\116\101")
-return remote and remote:IsA("\082\101\109\111\116\101\070\117\110\099\116\105\111\110") and remote or nil
-end
-local passModule
-local function getPassModule()
-if passModule then return passModule end
-local shared = ReplicatedStorage:FindFirstChild("\115\104\097\114\101\100")
-local modules = shared and shared:FindFirstChild("\109\111\100\117\108\101\115")
-local candidate = modules and modules:FindFirstChild("\072\097\108\108\111\119\101\101\110\080\097\115\115")
-if candidate and candidate:IsA("\077\111\100\117\108\101\083\099\114\105\112\116") then
-local ok, result = pcall(require, candidate)
-if ok and type(result) == "\116\097\098\108\101" then
-passModule = result
-return result
-end
-end
-return nil
-end
-local function passInvoke(remote, action, payload)
-local ok, response = pcall(function()
-return remote:InvokeServer(action, payload or {})
-end)
-if not ok then
-warn("\091\065\082\065\083\065\075\065\093\091\080\065\083\083\093\032" .. action .. "\032\101\114\114\111\058\032" .. tostring(response))
-return nil
-end
-if type(response) ~= "\116\097\098\108\101" then
-warn("\091\065\082\065\083\065\075\065\093\091\080\065\083\083\093\032" .. action .. "\032\114\101\116\111\114\110\111\117\032\114\101\115\112\111\115\116\097\032\105\110\118\097\108\105\100\097")
-return nil
-end
-if response.Ok ~= true and response.Reason ~= "\099\108\097\105\109\101\100" then
-warn("\091\065\082\065\083\065\075\065\093\091\080\065\083\083\093\032" .. action .. "\032\114\101\099\117\115\097\100\111\058\032" .. tostring(response.Reason))
-end
-return response
-end
-local function getPassState(remote)
-local response = passInvoke(remote, "\071\101\116\083\116\097\116\101", {})
-if not response or response.Ok ~= true or type(response.State) ~= "\116\097\098\108\101" then
-warn("\091\065\082\065\083\065\075\065\093\091\080\065\083\083\093\032\071\101\116\083\116\097\116\101\032\110\097\111\032\114\101\116\111\114\110\111\117\032\083\116\097\116\101\032\118\097\108\105\100\111")
-return nil
-end
-return response.State
-end
-local function collectHalloweenPass(alive)
-local remote = getPassRemote()
-if not remote then
-warn("\091\065\082\065\083\065\075\065\093\091\080\065\083\083\093\032\104\097\108\108\111\119\101\101\110\080\097\115\115\082\101\109\111\116\101\032\110\097\111\032\101\110\099\111\110\116\114\097\100\111")
-return
-end
-local state = getPassState(remote)
-if not state then return end
-if state.Active == false then
-print("\091\065\082\065\083\065\075\065\093\091\080\065\083\083\093\032\080\097\115\115\101\032\110\097\111\032\101\115\116\097\032\097\116\105\118\111")
-return
-end
-local module = getPassModule()
-local successes = 0
-local attempted = 0
-local function canContinue()
-return alive() and passEnabled
-end
-local function claim(action, data, description)
-if not canContinue() then return false end
-local response = passInvoke(remote, action, data)
-attempted += 1
-if response and response.Ok == true then
-successes += 1
-print("\091\065\082\065\083\065\075\065\093\091\080\065\083\083\093\032\067\111\108\101\116\097\100\111\058\032" .. description)
-local updated = response.State
-if type(updated) ~= "\116\097\098\108\101" then
-updated = getPassState(remote)
-end
-if type(updated) == "\116\097\098\108\101" then state = updated end
-end
-task.wait(0.65)
-return response and response.Ok == true
-end
-if module and type(module.TierUnlocked) == "\102\117\110\099\116\105\111\110" and type(module.IsTierClaimed) == "\102\117\110\099\116\105\111\110" then
-local maxTier = math.clamp(math.floor(tonumber(state.MaxTier) or 0), 0, 200)
-for tier = 1, maxTier do
-if not canContinue() then break end
-local ok, unlocked, claimed = pcall(function()
-return module.TierUnlocked(state.Exp, tier), module.IsTierClaimed(state.Claimed, tier)
-end)
-if ok and unlocked and not claimed then
-claim("\067\108\097\105\109\084\105\101\114", {Tier = tier}, "\084\105\101\114\032" .. tier)
-end
-end
-else
-warn("\091\065\082\065\083\065\075\065\093\091\080\065\083\083\093\032\077\111\100\117\108\111\032\072\097\108\108\111\119\101\101\110\080\097\115\115\032\105\110\100\105\115\112\111\110\105\118\101\108\059\032\110\097\111\032\116\101\110\116\097\114\101\105\032\116\105\101\114\115\032\098\108\111\113\117\101\097\100\111\115")
-end
-for _, group in ipairs({"\068\097\105\108\121", "\083\101\097\115\111\110"}) do
-local quests = state[group]
-if type(quests) == "\116\097\098\108\101" then
-for _, quest in pairs(quests) do
-if not canContinue() then break end
-if type(quest) == "\116\097\098\108\101"
-and not quest.Claimed
-and type(quest.Progress) == "\110\117\109\098\101\114"
-and type(quest.Count) == "\110\117\109\098\101\114"
-and quest.Progress >= quest.Count
-and quest.Category ~= nil
-and quest.Key ~= nil then
-claim("\067\108\097\105\109\081\117\101\115\116", {Category = quest.Category, Key = quest.Key},
-group .. "\032" .. tostring(quest.Key))
-end
-end
-end
-end
-if canContinue() and state.FinalUnlocked == true and state.FinalClaimed ~= true then
-claim("\067\108\097\105\109\070\105\110\097\108", {}, "\080\114\101\109\105\111\032\070\105\110\097\108")
-end
-print(string.format("\091\065\082\065\083\065\075\065\093\091\080\065\083\083\093\032\070\105\110\097\108\105\122\097\100\111\058\032\037\100\032\115\117\099\101\115\115\111\040\115\041\032\101\109\032\037\100\032\116\101\110\116\097\116\105\118\097\040\115\041", successes, attempted))
-end
-Core:TrackConnection("\085\073", btnHalloweenPass.MouseButton1Click:Connect(function()
-playClickSound()
-passEnabled = not passEnabled
-refreshPassButton()
-if not passEnabled then
-Core:StopWorker(PASS_WORKER)
-return
-end
-Core:StartWorker(PASS_WORKER, function(alive)
-while alive() and passEnabled do
-collectHalloweenPass(alive)
-if alive() and passEnabled then task.wait(1) end
-end
-end)
-end))
-local PRESTIGE_WORKER = "\071\114\097\116\105\115\086\050\052\046\065\117\116\111\072\097\108\108\111\119\101\101\110\080\114\101\115\116\105\103\101"
-local prestigeEnabled = false
-local btnPassPrestige = hwButton("\065\085\084\079\032\080\082\069\083\084\073\071\069\032\240\159\142\131\058\032\079\070\070\032\240\159\148\180")
-local function refreshPrestigeButton()
-btnPassPrestige.Text = "\065\085\084\079\032\080\082\069\083\084\073\071\069\032\240\159\142\131\058\032" .. (prestigeEnabled and "\079\078\032\240\159\159\162" or "\079\070\070\032\240\159\148\180")
-btnPassPrestige.BackgroundColor3 = prestigeEnabled and Color3.fromRGB(35, 93, 56) or Color3.fromRGB(64, 26, 31)
-end
-refreshPrestigeButton()
-local function attemptPrestige()
-local remote = getPassRemote()
-if not remote then
-warn("\091\065\082\065\083\065\075\065\093\091\080\082\069\083\084\073\071\069\093\032\104\097\108\108\111\119\101\101\110\080\097\115\115\082\101\109\111\116\101\032\110\097\111\032\101\110\099\111\110\116\114\097\100\111")
-return
-end
-local state = getPassState(remote)
-if not state or state.Active == false then return end
-local tier = tonumber(state.Tier)
-local maximum = tonumber(state.MaxTier)
-if not tier or not maximum or maximum <= 0 or tier < maximum then return end
-local before = tonumber(state.Prestige)
-local response = passInvoke(remote, "\080\114\101\115\116\105\103\101", {})
-if not response or response.Ok ~= true then return end
-local afterState = type(response.State) == "\116\097\098\108\101" and response.State or getPassState(remote)
-local after = afterState and tonumber(afterState.Prestige)
-if before and after then
-print(string.format("\091\065\082\065\083\065\075\065\093\091\080\082\069\083\084\073\071\069\093\032\037\100\032\045\062\032\037\100", before, after))
-else
-print("\091\065\082\065\083\065\075\065\093\091\080\082\069\083\084\073\071\069\093\032\083\101\114\118\105\100\111\114\032\097\099\101\105\116\111\117\032\097\032\115\111\108\105\099\105\116\097\099\097\111")
-end
-end
-Core:TrackConnection("\085\073", btnPassPrestige.MouseButton1Click:Connect(function()
-playClickSound()
-prestigeEnabled = not prestigeEnabled
-refreshPrestigeButton()
-if not prestigeEnabled then
-Core:StopWorker(PRESTIGE_WORKER)
-return
-end
-Core:StartWorker(PRESTIGE_WORKER, function(alive)
-while alive() and prestigeEnabled do
-attemptPrestige()
-for _ = 1, 30 do
-if not alive() or not prestigeEnabled then break end
-task.wait(1)
-end
-end
-end)
-end))
-Core:AddCleanup("\085\073", function()
-passEnabled = false
-prestigeEnabled = false
-Core:StopWorker(PASS_WORKER)
-Core:StopWorker(PRESTIGE_WORKER)
-end)
-local halloweenRespawnConnection = player.CharacterAdded:Connect(function(character)
-if not HWState.enabled then return end
-task.spawn(function()
-local humanoid = character:WaitForChild("\072\117\109\097\110\111\105\100",12)
-local root = character:WaitForChild("\072\117\109\097\110\111\105\100\082\111\111\116\080\097\114\116",12)
-if not humanoid or not root then return end
-task.wait(1.5)
-if not HWState.enabled or humanoid.Health <= 0 then return end
-pcall(function() root.CFrame = CFrame.new(263,18,378) end)
-task.wait(0.5)
-if not HWState.enabled then return end
-local events = ReplicatedStorage:FindFirstChild("\114\069\118\101\110\116\115")
-local travel = events and events:FindFirstChild("\097\114\101\097\084\114\097\118\101\108\082\101\109\111\116\101")
-local circles = workspace:FindFirstChild("\097\114\101\097\067\105\114\099\108\101\115")
-local destination = circles and circles:FindFirstChild("\104\097\108\108\111\119\101\100\071\121\109\067\105\114\099\108\101")
-if travel and travel:IsA("\082\101\109\111\116\101\070\117\110\099\116\105\111\110") and destination then
-pcall(function() travel:InvokeServer("\116\114\097\118\101\108\084\111\065\114\101\097",destination) end)
-end
-end)
-end)
-if Core and Core.TrackConnection then Core:TrackConnection("\085\073",halloweenRespawnConnection) end
-local HWMainButton = hwButton("\065\085\084\079\032\072\065\076\076\079\087\069\069\078\058\032\079\070\070\032\240\159\148\180")
-local HWStatus = hwText("\083\116\097\116\117\115\058\032\097\103\117\097\114\100\097\110\100\111\032\097\116\105\118\097\195\167\195\163\111", 12, 48, Color3.fromRGB(193, 192, 192))
-hwText("\083\069\076\069\067\073\079\078\069\032\079\083\032\066\079\083\083\069\083", 13, 30, Color3.fromRGB(245, 139, 87))
-local function hwStatus(msg)
-if HWStatus.Parent then HWStatus.Text = "\083\116\097\116\117\115\058\032" .. tostring(msg) end
-end
-local function hwUpdateMain()
-HWMainButton.Text = HWState.enabled and "\065\085\084\079\032\072\065\076\076\079\087\069\069\078\058\032\079\078\032\240\159\159\162" or "\065\085\084\079\032\072\065\076\076\079\087\069\069\078\058\032\079\070\070\032\240\159\148\180"
-HWMainButton.BackgroundColor3 = HWState.enabled and Color3.fromRGB(35, 93, 56) or Color3.fromRGB(64, 26, 31)
-end
-hwUpdateMain()
-for _, bossName in ipairs(HWINames) do
-local row = hwButton("")
-local function update()
-row.Text = (HWState.selected[bossName] and "\226\156\133\032" or "\226\172\156\032") .. bossName
-row.BackgroundColor3 = HWState.selected[bossName] and Color3.fromRGB(42, 31, 30) or Color3.fromRGB(20, 20, 20)
-end
-update()
-Core:TrackConnection("\085\073", row.MouseButton1Click:Connect(function()
-HWState.selected[bossName] = not HWState.selected[bossName]
-update()
-end))
-end
-hwText("\077\097\110\116\101\110\104\097\032\065\117\116\111\032\066\111\115\115\032\110\111\114\109\097\108\032\101\032\065\117\116\111\032\081\117\101\115\116\032\100\101\115\108\105\103\097\100\111\115\032\097\111\032\117\115\097\114\032\101\115\116\097\032\097\098\097\046\032\083\101\032\097\109\098\111\115\032\102\111\114\101\109\032\097\116\105\118\097\100\111\115\044\032\072\097\108\108\111\119\101\101\110\032\112\097\114\097\032\112\097\114\097\032\101\118\105\116\097\114\032\099\111\110\102\108\105\116\111\032\100\101\032\116\101\108\101\112\111\114\116\101\046", 11, 75, Color3.fromRGB(156, 152, 152))
-local function hwCharacter()
-local ch = player.Character
-if not ch then return nil, nil, nil end
-return ch, ch:FindFirstChildOfClass("\072\117\109\097\110\111\105\100"), ch:FindFirstChild("\072\117\109\097\110\111\105\100\082\111\111\116\080\097\114\116")
-end
-local function hwJump()
-local _, hum, root = hwCharacter()
-if not hum or hum.Health <= 0 or not root then return end
-pcall(function()
-hum.Sit = false
-hum.Jump = true
-hum:ChangeState(Enum.HumanoidStateType.Jumping)
-local v = root.AssemblyLinearVelocity
-root.AssemblyLinearVelocity = Vector3.new(v.X, math.max(v.Y, 28), v.Z)
-end)
-end
-local function hwFind()
-for _, name in ipairs(HWINames) do
-if HWState.selected[name] then
-local obj = workspace:FindFirstChild(name)
-if obj then
-if obj:IsA("\066\097\115\101\080\097\114\116") then
-local parentHumanoid = obj.Parent and obj.Parent:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
-if not parentHumanoid or parentHumanoid.Health > 0 then return name, obj end
-end
-if obj:IsA("\077\111\100\101\108") then
-local hum = obj:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
-if not hum or hum.Health > 0 then
-local part = obj.PrimaryPart or obj:FindFirstChild("\072\117\109\097\110\111\105\100\082\111\111\116\080\097\114\116") or obj:FindFirstChildWhichIsA("\066\097\115\101\080\097\114\116", true)
-if part then return name, part end
-end
-end
-end
-end
-end
-return nil, nil
-end
-local function hwBusy()
-return Core:IsWorkerRunning("\070\097\114\109\115\046\066\111\115\115\080\111\115\105\116\105\111\110")
-or Core:IsWorkerRunning("\070\097\114\109\115\046\066\111\115\115\065\116\116\097\099\107")
-or Core:IsWorkerRunning("\069\110\099\104\097\110\116\109\101\110\116\115\046\065\117\116\111\081\117\101\115\116")
-end
-local function hwEquipPunch(ch, hum)
-local equipped = ch:FindFirstChild("\080\117\110\099\104")
-if equipped and equipped:IsA("\084\111\111\108") then return equipped end
-local backpack = player:FindFirstChild("\066\097\099\107\112\097\099\107")
-local tool = backpack and backpack:FindFirstChild("\080\117\110\099\104")
-if tool and tool:IsA("\084\111\111\108") then
-pcall(function() hum:EquipTool(tool) end)
-return tool
-end
-return nil
-end
-local function hwFreezeTransition()
-local _, hum, root = hwCharacter()
-if not root or not hum or hum.Health <= 0 then return false end
-root.AssemblyLinearVelocity = Vector3.zero
-root.AssemblyAngularVelocity = Vector3.zero
-root.Anchored = true
-return true
-end
-local function hwReturn()
-Core:SetBossInverted("\072\097\108\108\111\119\101\101\110", false)
-if HWState.returning or not HWState.origin then return end
-hwFreezeTransition()
-HWState.returning = true
-local origin = HWState.origin
-local oldTool = HWState.savedTool
-HWState.origin = nil
-HWState.savedTool = nil
-HWState.target = nil
-HWState.altitude = 65
-hwStatus("\114\101\116\111\114\110\097\110\100\111\032\097\111\032\102\097\114\109\032\115\101\109\032\099\097\105\114")
-task.wait(0.15)
-local ch, hum, root = hwCharacter()
-if ch and hum and hum.Health > 0 and root then
-pcall(function()
-root.CFrame = origin
-root.AssemblyLinearVelocity = Vector3.zero
-root.AssemblyAngularVelocity = Vector3.zero
-root.Anchored = false
-end)
-if oldTool then
-local backpack = player:FindFirstChild("\066\097\099\107\112\097\099\107")
-local tool = ch:FindFirstChild(oldTool) or (backpack and backpack:FindFirstChild(oldTool))
-if tool and tool:IsA("\084\111\111\108") then pcall(function() hum:EquipTool(tool) end) end
-end
-end
-local _, _, leftoverRoot = hwCharacter()
-if leftoverRoot then leftoverRoot.Anchored = false end
-HWState.returning = false
-hwStatus("\097\103\117\097\114\100\097\110\100\111")
-end
-local function hwStop(reason)
-Core:SetBossInverted("\072\097\108\108\111\119\101\101\110", false)
-if not HWState.enabled then return end
-HWState.enabled = false
-HWState.generation += 1
-Core:StopWorker("\072\097\108\108\111\119\101\101\110\046\066\111\115\115\070\097\114\109")
-hwUpdateMain()
-hwStatus(reason or "\100\101\115\108\105\103\097\100\111")
-if HWState.origin then
-task.spawn(hwReturn)
-end
-end
-Core:TrackConnection("\085\073", HWMainButton.MouseButton1Click:Connect(function()
-if HWState.enabled then
-hwStop("\100\101\115\108\105\103\097\100\111\032\109\097\110\117\097\108\109\101\110\116\101")
-return
-end
-if HWState.returning or HWState.origin then
-hwStatus("\097\103\117\097\114\100\101\032\111\032\114\101\116\111\114\110\111\032\195\160\032\109\195\161\113\117\105\110\097\032\097\110\116\101\114\105\111\114")
-return
-end
-if hwBusy() then
-hwStatus("\100\101\115\108\105\103\117\101\032\065\117\116\111\032\066\111\115\115\032\101\032\065\117\116\111\032\081\117\101\115\116\032\097\110\116\101\115\032\100\101\032\097\116\105\118\097\114\032\072\097\108\108\111\119\101\101\110")
-return
-end
-local any = false
-for _, name in ipairs(HWINames) do
-if HWState.selected[name] then any = true break end
-end
-if not any then hwStatus("\115\101\108\101\099\105\111\110\101\032\112\101\108\111\032\109\101\110\111\115\032\117\109\032\098\111\115\115") return end
-HWState.enabled = true
-HWState.generation += 1
-local generation = HWState.generation
-hwUpdateMain()
-hwStatus("\112\114\111\099\117\114\097\110\100\111\032\098\111\115\115\101\115\032\100\111\032\101\118\101\110\116\111")
-Core:StartWorker("\072\097\108\108\111\119\101\101\110\046\066\111\115\115\070\097\114\109", function(isAlive)
-local alternating = false
-local lastName = nil
-local lastPart = nil
-local movementAngle = 0
-local movementClock = os.clock()
-while isAlive() and HWState.enabled and generation == HWState.generation do
-if hwBusy() then
-hwStop("\065\117\116\111\032\066\111\115\115\047\081\117\101\115\116\032\100\101\116\101\099\116\097\100\111\058\032\072\097\108\108\111\119\101\101\110\032\112\097\117\115\097\100\111")
-break
-end
-local name, part = hwFind()
-if not name or not part then
-Core:SetBossInverted("\072\097\108\108\111\119\101\101\110", false)
-if lastName ~= nil then hwFreezeTransition() end
-if HWState.origin then
-hwReturn()
-else
-hwStatus("\097\103\117\097\114\100\097\110\100\111\032\115\112\097\119\110\032\100\111\115\032\098\111\115\115\101\115\032\115\101\108\101\099\105\111\110\097\100\111\115")
-end
-lastName = nil
-task.wait(0.8)
-else
-if HWState.origin == nil then
-local ch, _, root = hwCharacter()
-if root then
-HWState.origin = root.CFrame
-local tool = ch:FindFirstChildWhichIsA("\084\111\111\108")
-HWState.savedTool = tool and tool.Name or nil
-end
-end
-if name ~= lastName or part ~= lastPart then
-Core:SetBossInverted("\072\097\108\108\111\119\101\101\110", false)
-hwStatus(name .. "\032\100\101\116\101\099\116\097\100\111\058\032\116\114\097\110\115\105\195\167\195\163\111\032\115\101\103\117\114\097")
-if lastName ~= nil then
-hwFreezeTransition()
-task.wait(0.15)
-else
-hwJump()
-task.wait(2)
-end
-if not isAlive() or not HWState.enabled or generation ~= HWState.generation then break end
-name, part = hwFind()
-if not part then
-lastName = nil
-task.wait(0.3)
-continue
-end
-lastName = name
-lastPart = part
-movementAngle = 0
-movementClock = os.clock()
-HWState.altitude = 65
-hwStatus("\097\116\097\099\097\110\100\111\032" .. name)
-end
-local ch, hum, root = hwCharacter()
-if hum and hum.Health > 0 and root and part and part.Parent then
-HWState.altitude = Core:UpdateBossAltitude("\072\097\108\108\111\119\101\101\110", hum, part, 65, Core.BossAltitudeConfig.EventMinimums[name] or 60)
-pcall(function()
-local desired = part.Position + Vector3.new(0, HWState.altitude, 0)
-root.CFrame = CFrame.new(desired) * root.CFrame.Rotation
-Core:SetBossInverted("\072\097\108\108\111\119\101\101\110", true)
-root.AssemblyLinearVelocity = Vector3.zero
-root.AssemblyAngularVelocity = Vector3.zero
-if root.Anchored then root.Anchored = false end
-end)
-local tool = hwEquipPunch(ch, hum)
-if tool then pcall(function() tool:Activate() end) end
-local ev = player:FindFirstChild("\109\117\115\099\108\101\069\118\101\110\116") or ch:FindFirstChild("\109\117\115\099\108\101\069\118\101\110\116")
-if not ev then
-local rsEvents = game:GetService("\082\101\112\108\105\099\097\116\101\100\083\116\111\114\097\103\101"):FindFirstChild("\114\069\118\101\110\116\115")
-ev = rsEvents and rsEvents:FindFirstChild("\109\117\115\099\108\101\069\118\101\110\116")
-end
-if ev and ev:IsA("\082\101\109\111\116\101\069\118\101\110\116") then
-alternating = not alternating
-pcall(function() ev:FireServer("\112\117\110\099\104", alternating and "\108\101\102\116\072\097\110\100" or "\114\105\103\104\116\072\097\110\100") end)
-else
-hwStatus("\109\117\115\099\108\101\069\118\101\110\116\032\110\195\163\111\032\101\110\099\111\110\116\114\097\100\111")
-end
-else
-Core:SetBossInverted("\072\097\108\108\111\119\101\101\110", false)
-end
-task.wait(0.1)
-end
-end
-end)
-end))
-Core:AddCleanup("\085\073", function()
-HWState.enabled = false
-HWState.generation += 1
-Core:StopWorker("\072\097\108\108\111\119\101\101\110\046\066\111\115\115\070\097\114\109")
-Core:SetBossInverted("\072\097\108\108\111\119\101\101\110", false)
-local _, _, root = hwCharacter()
-if root then root.Anchored = false end
-end)
-end
 local ArasakaOptionSizing = {
 Root = contentArea,
 Mode = UserInputService.TouchEnabled and 2 or 1,
@@ -6962,7 +4685,6 @@ self:SetMode(self.Mode)
 end
 local tabKill = CriarAba("\075\105\108\108", "\075\073\076\076")
 local tabChat = CriarAba("\067\104\097\116", "\067\072\065\084")
-BuildMedalTab(abas["\077\101\100\097\108"].container, abas["\077\101\100\097\108"].btn, player, ReplicatedStorage, HttpService, playClickSound, Core)
 CriarAba("\067\097\108\099\117\108\097\100\111\114\097", "\067\065\076\067\085\076\065\068\079\082\065")
 abas["\073\110\195\173\099\105\111"].container.Visible = true
 abas["\073\110\195\173\099\105\111"].btn.BackgroundColor3 = Color3.fromRGB(45, 15, 18)
@@ -7178,7 +4900,7 @@ Utils.PerfEnd("\067\072\065\084\095\076\065\090\089\095\073\078\073\084")
 self.Loading = false
 if ok then
 self.Initialized = true
-print("\091\065\082\065\083\065\075\065\093\091\077\079\068\085\076\069\093\032\067\104\097\116\032\061\032\067\065\082\082\069\071\065\068\079")
+
 else
 warn("\091\065\082\065\083\065\075\065\093\091\077\079\068\085\076\069\058\067\104\097\116\093\032\070\097\108\104\097\058", err)
 end
@@ -8434,65 +6156,26 @@ if startCustomRebirthWorker then startCustomRebirthWorker() end
 refreshTrainingWatchdog()
 end)
 end
-local function equipRebirthWeight()
-local ch = player.Character
-local hum = ch and ch:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
-local backpack = player:FindFirstChild("\066\097\099\107\112\097\099\107")
-if not ch or not hum or hum.Health <= 0 then return false end
-local current = ch:FindFirstChildWhichIsA("\084\111\111\108")
-if current and (current.Name:lower():find("\119\101\105\103\104\116", 1, true) or current.Name:lower():find("\112\101\115\111", 1, true)) then return true end
-for _, container in ipairs({backpack, ch}) do
-if container then
-for _, obj in ipairs(container:GetChildren()) do
-if obj:IsA("\084\111\111\108") and (obj.Name:lower():find("\119\101\105\103\104\116", 1, true) or obj.Name:lower():find("\112\101\115\111", 1, true)) then
-pcall(function() hum:EquipTool(obj) end)
-return true
-end
-end
-end
-end
-return false
-end
 startTargetRebirthWorker = function()
 if not targetRebirthActive or targetRebirthValue <= 0 then
 Core:StopWorker("\070\097\114\109\115\046\084\097\114\103\101\116\082\101\098\105\114\116\104")
 return
 end
 Core:StartWorker("\070\097\114\109\115\046\084\097\114\103\101\116\082\101\098\105\114\116\104", function(isAlive)
-equipRebirthWeight()
-local lastStrength = nil
-local lastCheck = os.clock()
+Core:BeginFarmTraining(player)
 while isAlive() and targetRebirthActive and targetRebirthValue > 0 do
 local leaderstats = player:FindFirstChild("\108\101\097\100\101\114\115\116\097\116\115")
 local rebirthsVal = leaderstats and leaderstats:FindFirstChild("\082\101\098\105\114\116\104\115")
 if rebirthsVal then
-if os.clock() - lastCheck >= 5 then
-local strength = leaderstats and leaderstats:FindFirstChild("\083\116\114\101\110\103\116\104")
-local value = strength and tonumber(strength.Value)
-if value and lastStrength and value <= lastStrength then equipRebirthWeight() end
-lastStrength = value
-lastCheck = os.clock()
-end
 if rebirthsVal.Value >= targetRebirthValue then
 targetRebirthActive = false
 targetRebirthButton.Text = "\065\085\084\079\032\082\069\066\073\082\084\072\032\084\065\082\071\069\084\058\032\079\070\070\032\240\159\148\180"
 targetRebirthButton.BackgroundColor3 = Color3.fromRGB(14, 14, 14)
 break
 end
-local muscleEvent = getMuscleEvent()
-if muscleEvent then
-for _ = 1, 4 do
-pcall(function()
-muscleEvent:FireServer("\114\101\112")
-end)
-end
-end
+Core:TrainRebirthStep(player, 4)
 local rebirthRemote = getRebirthRemote()
-if rebirthRemote then
-pcall(function()
-rebirthRemote:InvokeServer("\114\101\098\105\114\116\104\082\101\113\117\101\115\116")
-end)
-end
+Core:RequestFarmRebirth(player, rebirthRemote)
 end
 RunService.Heartbeat:Wait()
 end
@@ -8516,7 +6199,7 @@ Core:StopWorker("\070\097\114\109\115\046\067\117\115\116\111\109\082\101\098\10
 return
 end
 Core:StartWorker("\070\097\114\109\115\046\067\117\115\116\111\109\082\101\098\105\114\116\104", function(isAlive)
-equipRebirthWeight()
+Core:BeginFarmTraining(player)
 local lastEquippedState = ""
 while isAlive() and customRebirthActive do
 local leaderstats = player:FindFirstChild("\108\101\097\100\101\114\115\116\097\116\115")
@@ -8529,19 +6212,8 @@ if lastEquippedState ~= "\116\114\097\105\110" then
 equipCustomSlotsTeam(customFarmingSlots)
 lastEquippedState = "\116\114\097\105\110"
 end
-local lastWeightCheck = os.clock()
-local lastWeightStrength = tonumber(strengthVal.Value)
 while isAlive() and customRebirthActive and strengthVal.Value < targetStr do
-if os.clock() - lastWeightCheck >= 5 then
-local currentStrength = tonumber(strengthVal.Value)
-if currentStrength and lastWeightStrength and currentStrength <= lastWeightStrength then equipRebirthWeight() end
-lastWeightStrength = currentStrength
-lastWeightCheck = os.clock()
-end
-local event = getMuscleEvent()
-if event then
-for _ = 1, repsBurst do event:FireServer("\114\101\112") end
-end
+Core:TrainRebirthStep(player, repsBurst)
 task.wait(0.01)
 end
 if isAlive() and customRebirthActive and strengthVal.Value >= targetStr then
@@ -8553,7 +6225,7 @@ task.wait(0.05)
 local startR = rebirthsVal.Value
 local rebirthRemote = getRebirthRemote()
 repeat
-if rebirthRemote then pcall(function() rebirthRemote:InvokeServer("\114\101\098\105\114\116\104\082\101\113\117\101\115\116") end) end
+Core:RequestFarmRebirth(player, rebirthRemote)
 task.wait(0.1)
 until rebirthsVal.Value > startR or not customRebirthActive or not isAlive()
 end
@@ -8601,14 +6273,15 @@ Core:StopWorker("\070\097\114\109\115\046\065\117\116\111\085\110\105\102\105\10
 return
 end
 Core:StartWorker("\070\097\114\109\115\046\065\117\116\111\085\110\105\102\105\101\100", function(isAlive)
+Core:BeginFarmTraining(player)
 local lastRebirthTime = 0
 while isAlive() and autoUnifiedFarmActive do
 local event = getMuscleEvent()
 local rebirthRemote = getRebirthRemote()
 if event then
-for _ = 1, 4 do pcall(function() event:FireServer("\114\101\112") end) end
+Core:TrainRebirthStep(player, 4)
 if rebirthRemote and (tick() - lastRebirthTime >= 1) then
-pcall(function() rebirthRemote:InvokeServer("\114\101\098\105\114\116\104\082\101\113\117\101\115\116") end)
+Core:RequestFarmRebirth(player, rebirthRemote)
 lastRebirthTime = tick()
 end
 RunService.Heartbeat:Wait()
@@ -8633,37 +6306,8 @@ local v = ls and (ls:FindFirstChild("\083\116\114\101\110\103\116\104") or ls:Fi
 return v and tonumber(v.Value) or 0
 end
 local function equipWeightAndTrain()
-local char = player.Character
-local humanoid = char and char:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
-local backpack = player:FindFirstChild("\066\097\099\107\112\097\099\107")
-if not char or not humanoid then return end
-local weight = char:FindFirstChild("\087\101\105\103\104\116")
-if not weight and backpack then
-weight = backpack:FindFirstChild("\087\101\105\103\104\116")
-end
-if not weight then
-for _, container in ipairs({char, backpack}) do
-if container then
-for _, item in ipairs(container:GetChildren()) do
-if item:IsA("\084\111\111\108") and string.find(string.lower(item.Name), "\119\101\105\103\104\116", 1, true) then
-weight = item
-break
-end
-end
-end
-if weight then break end
-end
-end
-if weight and weight:IsA("\084\111\111\108") and weight.Parent ~= char then
-pcall(function() humanoid:EquipTool(weight) end)
-task.wait()
-end
-local event = getMuscleEvent()
-if event then
-for _ = 1, 8 do
-pcall(function() event:FireServer("\114\101\112") end)
-end
-end
+Core:EnsureFarmTrainingTool(player)
+Core:TrainRebirthStep(player, 8)
 end
 refreshTrainingWatchdog = function()
 local active = autoRepsActive or autoUnifiedFarmActive or customRebirthActive
@@ -8673,6 +6317,7 @@ return
 end
 if Core:IsWorkerRunning("\070\097\114\109\115\046\084\114\097\105\110\105\110\103\087\097\116\099\104\100\111\103") then return end
 Core:StartWorker("\070\097\114\109\115\046\084\114\097\105\110\105\110\103\087\097\116\099\104\100\111\103", function(isAlive)
+Core:ObserveFarmProgress(player)
 local previous = getStrength()
 while isAlive() and (autoRepsActive or autoUnifiedFarmActive or customRebirthActive) do
 local elapsed = 0
@@ -8748,84 +6393,23 @@ end
 local function equipRebirthPetsOverlord()
 equipPackRebirthCandidates({"\084\105\116\097\110\105\117\109\032\072\121\100\114\097", "\084\114\105\098\097\108\032\079\118\101\114\108\111\114\100"})
 end
-local function equipOverlordHandWeight()
-local char = player.Character
-local humanoid = char and char:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
-local backpack = player:FindFirstChild("\066\097\099\107\112\097\099\107")
-if not char or not humanoid then
-return false
-end
-local currentTool = char:FindFirstChildOfClass("\084\111\111\108")
-if currentTool and string.find(string.lower(currentTool.Name), "\119\101\105\103\104\116", 1, true) then
-return true
-end
-local weight = nil
-local preferredNames = {
-"\087\101\105\103\104\116",
-"\049\048\048\103\032\087\101\105\103\104\116",
-"\072\097\110\100\032\087\101\105\103\104\116",
-}
-for _, name in ipairs(preferredNames) do
-weight = char:FindFirstChild(name) or (backpack and backpack:FindFirstChild(name))
-if weight and weight:IsA("\084\111\111\108") then
-break
-end
-weight = nil
-end
-if not weight then
-for _, container in ipairs({char, backpack}) do
-if container then
-for _, item in ipairs(container:GetChildren()) do
-if item:IsA("\084\111\111\108")
-and string.find(string.lower(item.Name), "\119\101\105\103\104\116", 1, true) then
-weight = item
-break
-end
-end
-end
-if weight then break end
-end
-end
-if weight and weight:IsA("\084\111\111\108") then
-if weight.Parent ~= char then
-pcall(function()
-humanoid:EquipTool(weight)
-end)
-task.wait()
-end
-return weight.Parent == char
-end
-return false
-end
 startOverlordWorker = function()
 if not overlordRebirthActive then
 Core:StopWorker("\070\097\114\109\115\046\079\118\101\114\108\111\114\100")
 return
 end
 Core:StartWorker("\070\097\114\109\115\046\079\118\101\114\108\111\114\100", function(isAlive)
+Core:BeginFarmTraining(player)
 while isAlive() and overlordRebirthActive do
 equipFarmingPetsOverlord()
-equipOverlordHandWeight()
 local leaderstats = player:FindFirstChild("\108\101\097\100\101\114\115\116\097\116\115")
 local rebirthsVal = leaderstats and leaderstats:FindFirstChild("\082\101\098\105\114\116\104\115")
 local strengthVal = leaderstats and leaderstats:FindFirstChild("\083\116\114\101\110\103\116\104")
 if rebirthsVal and strengthVal then
 local targetStr = 5000 + (rebirthsVal.Value * 2550)
 local repsBurst = player.MembershipType == Enum.MembershipType.Premium and 6 or 12
-local lastWeightCheck = 0
 while isAlive() and overlordRebirthActive and strengthVal.Value < targetStr do
-if tick() - lastWeightCheck >= 1 then
-equipOverlordHandWeight()
-lastWeightCheck = tick()
-end
-local event = getMuscleEvent()
-if event then
-for _ = 1, repsBurst do
-pcall(function()
-event:FireServer("\114\101\112")
-end)
-end
-end
+Core:TrainRebirthStep(player, repsBurst)
 task.wait(0.01)
 end
 if isAlive() and overlordRebirthActive and strengthVal.Value >= targetStr then
@@ -8834,13 +6418,10 @@ task.wait(0.01)
 local startR = rebirthsVal.Value
 local rebirthRemote = getRebirthRemote()
 repeat
-if rebirthRemote then pcall(function() rebirthRemote:InvokeServer("\114\101\098\105\114\116\104\082\101\113\117\101\115\116") end) end
+Core:RequestFarmRebirth(player, rebirthRemote)
 task.wait(0.01)
 until rebirthsVal.Value > startR or not overlordRebirthActive or not isAlive()
-if overlordRebirthActive and isAlive() then
-task.wait(0.05)
-equipOverlordHandWeight()
-end
+
 end
 end
 task.wait(0.01)
@@ -9396,7 +6977,7 @@ if lockConnection then
 lockConnection:Disconnect()
 lockConnection = nil
 end
-print("\091\065\082\065\083\065\075\065\093\091\065\085\084\079\032\066\079\083\083\093\032\066\111\115\115\032\100\101\116\101\099\116\097\100\111\032\047\047\032\102\097\114\109\115\032\112\097\117\115\097\100\097\115\032\116\101\109\112\111\114\097\114\105\097\109\101\110\116\101\046")
+
 end
 local function resumeAllFarmsAfterBoss()
 local snapshot = bossFarmPauseSnapshot
@@ -9448,7 +7029,7 @@ end
 end)
 end
 refreshTrainingWatchdog()
-print("\091\065\082\065\083\065\075\065\093\091\065\085\084\079\032\066\079\083\083\093\032\070\097\114\109\115\032\097\110\116\101\114\105\111\114\101\115\032\114\101\116\111\109\097\100\097\115\046")
+
 end
 local function startBossFarmRuntime()
 Core:StopWorker("\070\097\114\109\115\046\066\111\115\115\080\111\115\105\116\105\111\110")
@@ -9494,7 +7075,7 @@ if targetPos then
 if lastBossObject ~= targetObject then Core:SetBossInverted("\078\111\114\109\097\108", false) end
 lastBossObject = targetObject
 if not lastBossSeen then
-print("\091\065\082\065\083\065\075\065\093\091\065\085\084\079\032\066\079\083\083\093\032\066\111\115\115\032\100\101\116\101\099\116\097\100\111\046\032\080\097\117\115\097\110\100\111\032\114\101\098\105\114\116\104\032\101\032\115\111\108\116\097\110\100\111\032\097\032\109\097\113\117\105\110\097\046")
+
 lastBossSeen = true
 end
 if not bossCycleInArena then
@@ -9512,7 +7093,7 @@ hrp.AssemblyLinearVelocity = Vector3.zero
 hrp.AssemblyAngularVelocity = Vector3.zero
 elseif bossCycleInArena then
 if lastBossSeen then
-print("\091\065\082\065\083\065\075\065\093\091\065\085\084\079\032\066\079\083\083\093\032\066\111\115\115\032\109\111\114\116\111\046\032\084\101\110\116\097\110\100\111\032\099\111\108\101\116\097\114\032\111\032\098\097\195\186\032\112\111\114\032\097\116\195\169\032\053\115\046")
+
 lastBossSeen = false
 end
 bossReturnDeadline = os.clock() + 5
@@ -9866,12 +7447,12 @@ FarmResumeContext.CFrame = root.CFrame
 FarmResumeContext.ToolName = tool and tool.Name or FarmResumeContext.ToolName
 FarmResumeContext.Prompt = nearestPrompt
 FarmResumeContext.SavedAt = os.clock()
-print(
-"\091\065\082\065\083\065\075\065\093\091\065\085\084\079\032\066\079\083\083\093\032\114\101\116\111\114\110\111\032\097\116\117\097\108\105\122\097\100\111\032\112\097\114\097\032\097\032\109\097\113\117\105\110\097\047\108\111\099\097\108\032\097\116\117\097\108\058",
-FarmResumeContext.FarmName,
-"\124\032\112\114\111\109\112\116\058",
-nearestPrompt and nearestPrompt:GetFullName() or "\110\097\111\032\101\110\099\111\110\116\114\097\100\111"
-)
+
+
+
+
+
+
 return true
 end
 local function captureFarmContext(farmName)
@@ -9885,12 +7466,12 @@ FarmResumeContext.CFrame = root.CFrame
 FarmResumeContext.ToolName = tool and tool.Name or nil
 FarmResumeContext.Prompt = findNearestFarmPrompt(root.Position, 22)
 FarmResumeContext.SavedAt = os.clock()
-print(
-"\091\065\082\065\083\065\075\065\093\091\070\065\082\077\032\067\079\078\084\069\088\084\093\032\115\097\108\118\111\058",
-FarmResumeContext.FarmName,
-"\124\032\116\111\111\108\058",
-FarmResumeContext.ToolName or "\110\101\110\104\117\109\097"
-)
+
+
+
+
+
+
 end
 local function pressEForFarm()
 local ok, vim = pcall(function()
@@ -9928,7 +7509,7 @@ if not root or not hum or hum.Health <= 0 then return false end
 root.CFrame = FarmResumeContext.CFrame
 root.AssemblyLinearVelocity = Vector3.zero
 root.AssemblyAngularVelocity = Vector3.zero
-print("\091\065\082\065\083\065\075\065\093\091\070\065\082\077\032\067\079\078\084\069\088\084\093\032\097\103\117\097\114\100\097\110\100\111\032\052\115\032\097\110\116\101\115\032\100\101\032\114\101\097\116\105\118\097\114\032\109\195\161\113\117\105\110\097\046\046\046")
+
 task.wait(4)
 char = player.Character or char
 hum = char and char:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
@@ -9964,12 +7545,12 @@ currentRoot.AssemblyAngularVelocity = Vector3.zero
 end
 end
 end
-print(
-"\091\065\082\065\083\065\075\065\093\091\070\065\082\077\032\067\079\078\084\069\088\084\093\032\114\101\115\116\097\117\114\097\100\111\058",
-FarmResumeContext.FarmName or "\070\065\082\077",
-"\124\032\109\097\113\117\105\110\097\058",
-activated and "\114\101\097\116\105\118\097\100\097" or "\116\101\110\116\097\116\105\118\097\032\099\111\110\099\108\117\105\100\097"
-)
+
+
+
+
+
+
 return true
 end
 local farmCaptureConnections = setmetatable({}, {__mode = "\107"})
@@ -10053,7 +7634,7 @@ if lockConnection then
 lockConnection:Disconnect()
 lockConnection = nil
 end
-print("\091\065\082\065\083\065\075\065\093\091\065\085\084\079\032\081\085\069\083\084\093\032\102\097\114\109\115\032\112\097\117\115\097\100\097\115\032\116\101\109\112\111\114\097\114\105\097\109\101\110\116\101\046")
+
 end
 ResumeFarmsAfterQuest = function()
 local snapshot = farmPauseSnapshot
@@ -10104,7 +7685,7 @@ end
 end)
 end
 refreshTrainingWatchdog()
-print("\091\065\082\065\083\065\075\065\093\091\065\085\084\079\032\081\085\069\083\084\093\032\102\097\114\109\115\032\114\101\116\111\109\097\100\097\115\046")
+
 end
 Utils.PerfEnd("\070\065\082\077\083\095\085\073")
 end
@@ -10220,7 +7801,7 @@ local QUEST_RETRY_COOLDOWN = 8
 local questRetryAfter = 0
 local function setStatus(text)
 status.Text = "\083\116\097\116\117\115\058\032" .. tostring(text)
-print("\091\065\082\065\083\065\075\065\093\091\065\085\084\079\032\081\085\069\083\084\093", text)
+
 end
 local function getQuestFolder()
 local quests = player:FindFirstChild("\081\117\101\115\116\115")
@@ -11553,7 +9134,7 @@ end
 while autoEvolveActive and Core:IsAlive() do
 local petName = SelectedEvolvePet
 if petName and petName ~= "" then
-print("\091\065\082\065\083\065\075\065\093\091\069\086\079\076\086\069\093\032\069\110\118\105\097\110\100\111\058", petName)
+
 local ok, err = pcall(function()
 evolveEvent:FireServer("\101\118\111\108\118\101\080\101\116", petName)
 end)
@@ -12651,7 +10232,7 @@ end)
 if Core then
 Core:TrackConnection("\078\111\116\105\102\105\099\097\099\111\101\115\085\110\105\118\101\114\115\097\105\115", conexaoNovoBotao)
 end
-print("\091\065\082\065\083\065\075\065\093\091\078\079\084\073\070\073\067\065\195\135\195\149\069\083\093\032\084\111\100\097\115\032\097\115\032\102\117\110\195\167\195\181\101\115\032\079\078\047\079\070\070\032\061\032\077\079\078\073\084\079\082\065\068\065\083")
+
 end
 iniciarNotificacoesUniversais()
 local DashboardModule = {
@@ -12738,7 +10319,7 @@ else
 table.insert(self.Connections, conn)
 end
 refresh()
-print("\091\065\082\065\083\065\075\065\093\091\077\079\068\085\076\069\093\032\068\097\115\104\098\111\097\114\100\032\061\032\077\073\071\082\065\068\079")
+
 end
 function DashboardModule:Stop()
 if Core then
@@ -12911,7 +10492,7 @@ else
 table.insert(self.Connections, refreshConnection)
 end
 refresh()
-print("\091\065\082\065\083\065\075\065\093\091\077\079\068\085\076\069\093\032\080\114\111\099\101\115\115\080\097\110\101\108\032\061\032\077\073\071\082\065\068\079")
+
 end
 function ProcessPanelModule:Stop()
 if Core then
@@ -13291,7 +10872,7 @@ Name = "\080\114\111\099\101\115\115\067\111\110\116\114\111\108"
 }
 function ProcessControlModule:StopAllManagedWorkers()
 Core:StopAllWorkers()
-print("\091\065\082\065\083\065\075\065\093\091\077\065\083\084\069\082\032\083\084\079\080\093\032\084\111\100\111\115\032\111\115\032\112\114\111\099\101\115\115\111\115\032\103\101\114\101\110\099\105\097\100\111\115\032\102\111\114\097\109\032\101\110\099\101\114\114\097\100\111\115\046")
+
 end
 function ProcessControlModule:GetSnapshot()
 return Core:GetWorkerSnapshot()
@@ -13331,7 +10912,7 @@ local coreMemoryOk, coreMemoryErr = Core:StartModule("\067\111\114\101\077\101\1
 if not coreMemoryOk then
 warn("\091\065\082\065\083\065\075\065\093\091\077\079\068\085\076\069\058\067\111\114\101\077\101\109\111\114\121\093\032\070\097\108\104\097\058", coreMemoryErr)
 else
-print("\091\065\082\065\083\065\075\065\093\091\077\079\068\085\076\069\093\032\067\111\114\101\077\101\109\111\114\121\032\061\032\077\073\071\082\065\068\079")
+
 end
 local MemoryJanitorModule = { Name = "\077\101\109\111\114\121\074\097\110\105\116\111\114" }
 function MemoryJanitorModule:Start()
@@ -13386,7 +10967,7 @@ local lifecycleOk, lifecycleErr = Core:StartModule("\072\117\098\076\105\102\101
 if not lifecycleOk then
 warn("\091\065\082\065\083\065\075\065\093\091\077\079\068\085\076\069\058\072\117\098\076\105\102\101\099\121\099\108\101\093\032\070\097\108\104\097\058", lifecycleErr)
 else
-print("\091\065\082\065\083\065\075\065\093\091\077\079\068\085\076\069\093\032\072\117\098\076\105\102\101\099\121\099\108\101\032\061\032\077\073\071\082\065\068\079")
+
 end
 local WorkerDiagnosticModule = {
 Name = "\087\111\114\107\101\114\068\105\097\103\110\111\115\116\105\099"
@@ -13412,7 +10993,7 @@ Core:RegisterModule("\075\105\108\108", Kill)
 Core:RegisterModule("\067\097\108\099\117\108\097\116\111\114", Calculator)
 Core:RegisterModule("\083\121\115\116\101\109", System)
 local __arasakaBootStart = os.clock()
-print("\091\065\082\065\083\065\075\065\093\091\066\079\079\084\093\032\086\101\114\115\097\111\032\116\101\109\112\111\114\097\114\105\097\032\105\110\105\099\105\097\110\100\111\046\046\046")
+
 Core:SetRunning(true)
 local uiStart = os.clock()
 local uiOk, uiErr = Core:StartModule("\085\073")
@@ -13422,26 +11003,26 @@ return
 end
 local uiElapsed = os.clock() - uiStart
 local totalElapsed = os.clock() - __arasakaBootStart
-print(string.format("\091\065\082\065\083\065\075\065\093\091\066\079\079\084\093\032\085\073\032\099\114\105\097\100\097\032\101\109\032\037\046\051\102\115", uiElapsed))
-print(string.format("\091\065\082\065\083\065\075\065\093\091\066\079\079\084\093\032\084\079\084\065\076\032\037\046\051\102\115", totalElapsed))
-print("\091\065\082\065\083\065\075\065\093\091\077\079\068\085\076\069\093\032\083\121\115\116\101\109\085\073\032\061\032\077\073\071\082\065\068\079")
-print("\091\065\082\065\083\065\075\065\093\091\067\079\082\069\093\032\071\101\114\101\110\099\105\097\100\111\114\068\101\080\114\111\099\101\115\115\111\115\032\061\032\079\078\076\073\078\069")
-print("\091\065\082\065\083\065\075\065\093\091\067\079\082\069\093\032\067\111\110\116\114\111\108\101\068\101\080\114\111\099\101\115\115\111\115\032\047\032\080\065\082\065\082\032\084\079\068\079\083\032\061\032\079\078\076\073\078\069")
-print("\091\065\082\065\083\065\075\065\093\091\067\079\082\069\093\032\080\097\105\110\101\108\068\101\080\114\111\099\101\115\115\111\115\032\061\032\079\078\076\073\078\069")
-print("\091\065\082\065\083\065\075\065\093\091\067\079\082\069\093\032\076\097\121\111\117\116\068\111\080\097\105\110\101\108\032\061\032\079\075")
-print("\091\065\082\065\083\065\075\065\093\091\067\079\082\069\093\032\080\114\105\109\101\105\114\111\032\112\114\111\099\101\115\115\111\032\109\105\103\114\097\100\111\032\061\032\067\111\114\101\077\101\109\111\114\121")
-print("\091\065\082\065\083\065\075\065\093\091\067\079\082\069\093\032\076\105\109\112\101\122\097\068\111\067\105\099\108\111\068\111\072\117\098\032\061\032\079\078\076\073\078\069")
-print("\091\065\082\065\083\065\075\065\093\091\067\079\082\069\093\032\071\101\114\101\110\099\105\097\100\111\114\068\101\067\111\110\101\120\111\101\115\032\061\032\079\078\076\073\078\069")
-print("\091\065\082\065\083\065\075\065\093\091\067\079\082\069\093\032\067\104\097\116\032\114\101\109\111\116\111\032\061\032\105\110\100\105\115\112\111\110\105\118\101\108\032\110\111\032\116\101\115\116\101\032\108\111\099\097\108")
+
+
+
+
+
+
+
+
+
+
+
 local __system = Core and Core:GetSystemSnapshot()
 if __system then
-print(string.format("\091\065\082\065\083\065\075\065\093\091\067\079\078\083\079\076\073\068\065\084\069\068\093\032\087\111\114\107\101\114\115\061\037\100\032\047\047\032\067\111\110\110\101\099\116\105\111\110\115\061\037\100", __system.workers, __system.connections))
+
 end
-print("\091\065\082\065\083\065\075\065\093\091\067\079\078\083\079\076\073\068\065\084\069\068\093\032\067\111\114\101\032\097\114\099\104\105\116\101\099\116\117\114\101\032\061\032\082\069\065\068\089")
-print("\091\065\082\065\083\065\075\065\093\091\067\079\077\080\076\069\084\069\093\032\080\097\105\110\101\108\068\111\083\105\115\116\101\109\097\032\061\032\079\078\076\073\078\069")
-print("\091\065\082\065\083\065\075\065\093\091\067\079\077\080\076\069\084\069\093\032\071\101\114\101\110\099\105\097\100\111\114\068\101\067\111\110\102\105\103\117\114\097\099\111\101\115\032\061\032\079\078\076\073\078\069")
-print("\091\065\082\065\083\065\075\065\093\091\067\079\077\080\076\069\084\069\093\032\078\111\116\105\102\105\099\097\099\111\101\115\032\061\032\079\078\076\073\078\069")
-print("\091\065\082\065\083\065\075\065\093\091\067\079\077\080\076\069\084\079\093\032\077\111\100\117\108\111\115\032\105\110\116\101\114\110\111\115\032\061\032\082\069\071\073\083\084\082\065\068\079\083")
-print("\091\065\082\065\083\065\075\065\093\091\067\079\077\080\076\069\084\079\093\032\073\110\116\101\114\102\097\099\101\032\112\114\105\110\099\105\112\097\108\032\061\032\080\079\082\084\085\071\085\069\083\032\066\082")
+
+
+
+
+
+
 Core:Notify("\065\082\065\083\065\075\065", "\083\105\115\116\101\109\097\032\099\097\114\114\101\103\097\100\111\032\101\032\112\114\111\110\116\111\032\112\097\114\097\032\117\115\111\046")
-print("\091\065\082\065\083\065\075\065\093\091\085\073\093\032\084\101\120\116\111\115\032\103\114\097\110\100\101\115\032\043\032\097\098\097\115\032\099\111\109\032\101\109\111\106\105\115\032\061\032\065\084\073\086\079")
+
