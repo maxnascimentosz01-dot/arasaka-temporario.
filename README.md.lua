@@ -2660,7 +2660,7 @@ worker.running = false
 self.Workers[name] = nil
 end
 if not ok then
-if name == "\070\097\114\109\115\046\066\111\115\115\080\111\115\105\116\105\111\110" then self:SetBossInverted("\078\111\114\109\097\108", false) end
+if name == "\070\097\114\109\115\046\066\111\115\115\080\111\115\105\116\105\111\110" and self:IsWorkerCurrent(name, generation) then self:SetBossInverted("\078\111\114\109\097\108", false) end
 warn("\091\065\082\065\083\065\075\065\093\091\087\079\082\075\069\082\058" .. name .. "\093\032\069\114\114\111\058", err)
 end
 end)
@@ -2673,6 +2673,23 @@ self:NextWorkerGeneration(name)
 if worker then worker.running = false end
 self.Workers[name] = nil
 return true
+end
+function Core:FindAliveAlienBoss()
+local chosen, chosenRoot, chosenId = nil, nil, -math.huge
+for _, boss in ipairs(workspace:GetChildren()) do
+if boss.Name == "\065\108\105\101\110\032\066\111\115\115" and boss:IsA("\077\111\100\101\108") and boss:GetAttribute("\066\111\115\115\069\109\101\114\103\105\110\103") ~= true then
+local health = tonumber(boss:GetAttribute("\072\101\097\108\116\104"))
+local humanoid = boss:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
+local alive = health ~= nil and health > 0 or (health == nil and humanoid ~= nil and humanoid.Health > 0)
+local root = boss:FindFirstChild("\072\117\109\097\110\111\105\100\082\111\111\116\080\097\114\116") or boss.PrimaryPart
+or boss:FindFirstChild("\066\111\115\115\068\097\109\097\103\101\072\105\116\098\111\120") or boss:FindFirstChildWhichIsA("\066\097\115\101\080\097\114\116", true)
+local id = tonumber(boss:GetAttribute("\073\068")) or 0
+if alive and root and root:IsA("\066\097\115\101\080\097\114\116") and (not chosen or id >= chosenId) then
+chosen, chosenRoot, chosenId = boss, root, id
+end
+end
+end
+return chosen, chosenRoot
 end
 function Core:IsWorkerRunning(name)
 local worker = self.Workers[name]
@@ -6008,6 +6025,7 @@ return btn
 end
 local autoFarmActive, autoRepsActive, autoUnifiedFarmActive, travarLocalActive = false, false, false, false
 local bossEventMode = "\078\111\114\109\097\108"
+local bossRuntimeEpoch = 0
 local alienChestClaimed, alienChestRequestedAt = false, -math.huge
 local alienApproachChest = nil
 local alienConfig = {}
@@ -6141,6 +6159,110 @@ return buyer
 end
 
  
+local function MountAlienAutoSell(parent, Core, player, ReplicatedStorage)
+local order = {"\067\111\115\109\105\099\032\073\110\118\097\100\101\114", "\065\108\105\101\110\032\083\108\105\109\101", "\085\070\079\032\066\111\116", "\071\097\108\097\116\105\099\032\079\118\101\114\108\111\114\100"}
+local selected, connections = {}, {}
+local enabled, alive, removed = false, true, 0
+local pending, retryAt = {}, {}
+local function label(message, height, order)
+local obj = Instance.new("\084\101\120\116\076\097\098\101\108", parent)
+obj.Size, obj.LayoutOrder = UDim2.new(1,-6,0,height), order
+obj.Text, obj.TextWrapped, obj.BackgroundTransparency = message, true, 1
+obj.TextColor3, obj.Font, obj.TextSize = Color3.fromRGB(205,205,205), Enum.Font.GothamBold, 15
+return obj
+end
+label("\065\085\084\079\032\083\069\076\076\032\080\069\084\083\032\047\047\032\115\101\108\101\099\105\111\110\101\032\113\117\097\105\115\032\112\101\116\115\032\118\101\110\100\101\114", 44, 7)
+local status
+for index, name in ipairs(order) do
+local selector = Instance.new("\084\101\120\116\066\117\116\116\111\110", parent)
+selector.Name, selector.LayoutOrder = "\065\108\105\101\110\083\101\108\108\083\101\108\101\099\116\095" .. name, 7 + index
+selector.Size, selector.Text = UDim2.new(1,-6,0,38), "\226\152\144\032" .. name
+selector.Font, selector.TextSize = Enum.Font.GothamBold, 15
+selector.TextColor3, selector.BackgroundColor3 = Color3.fromRGB(205,205,205), Color3.fromRGB(14,14,14)
+selector.BorderSizePixel = 0
+Instance.new("\085\073\067\111\114\110\101\114",selector).CornerRadius = UDim.new(0,6)
+table.insert(connections, selector.MouseButton1Click:Connect(function()
+selected[name] = not selected[name]
+selector.Text = (selected[name] and "\226\152\145\032" or "\226\152\144\032") .. name
+selector.BackgroundColor3 = selected[name] and Color3.fromRGB(45,15,18) or Color3.fromRGB(14,14,14)
+selector.TextColor3 = selected[name] and Color3.fromRGB(245,245,245) or Color3.fromRGB(205,205,205)
+if status then status.Text = selected[name] and ("\083\101\108\101\099\105\111\110\097\100\111\058\032" .. name) or ("\082\101\109\111\118\105\100\111\032\100\097\032\115\101\108\101\195\167\195\163\111\058\032" .. name) end
+end))
+end
+local button = Instance.new("\084\101\120\116\066\117\116\116\111\110", parent)
+button.Name, button.LayoutOrder = "\065\108\105\101\110\065\117\116\111\083\101\108\108\080\101\116\115", 12
+button.Size, button.Text = UDim2.new(1,-6,0,44), "\065\085\084\079\032\083\069\076\076\032\080\069\084\083\058\032\079\070\070\032\240\159\148\180"
+button.Font, button.TextSize = Enum.Font.GothamBold, 15
+button.TextColor3, button.BackgroundColor3 = Color3.fromRGB(245,245,245), Color3.fromRGB(180,30,30)
+button.BorderSizePixel = 0
+Instance.new("\085\073\067\111\114\110\101\114",button).CornerRadius = UDim.new(0,6)
+status = label("\078\101\110\104\117\109\032\112\101\116\032\115\101\108\101\099\105\111\110\097\100\111\046\032\077\097\114\113\117\101\032\111\115\032\112\101\116\115\032\101\032\108\105\103\117\101\032\111\032\065\117\116\111\032\083\101\108\108\046", 48, 13)
+table.insert(connections, button.MouseButton1Click:Connect(function()
+enabled = not enabled
+button.Text = enabled and "\065\085\084\079\032\083\069\076\076\032\080\069\084\083\058\032\079\078\032\240\159\159\162" or "\065\085\084\079\032\083\069\076\076\032\080\069\084\083\058\032\079\070\070\032\240\159\148\180"
+button.BackgroundColor3 = enabled and Color3.fromRGB(40,160,40) or Color3.fromRGB(180,30,30)
+status.Text = enabled and "\086\101\114\105\102\105\099\097\110\100\111\032\105\110\118\101\110\116\195\161\114\105\111\046\046\046" or "\068\101\115\097\116\105\118\097\100\111"
+end))
+local function equipped(pet)
+local folder = player:FindFirstChild("\101\113\117\105\112\112\101\100\080\101\116\115")
+if folder then
+for _,slot in ipairs(folder:GetDescendants()) do
+if slot:IsA("\079\098\106\101\099\116\086\097\108\117\101") and slot.Value==pet then return true end
+end
+end
+return false
+end
+Core:StartWorker("\070\097\114\109\115\046\065\108\105\101\110\065\117\116\111\083\101\108\108",function(isAlive)
+while alive and isAlive() do
+local bag=player:FindFirstChild("\112\101\116\115\070\111\108\100\101\114")
+for pet in pairs(pending) do
+if not bag or not pet:IsDescendantOf(bag) then
+removed+=1;pending[pet],retryAt[pet]=nil,nil
+end
+end
+for pet in pairs(retryAt) do
+if not bag or not pet:IsDescendantOf(bag) then retryAt[pet]=nil end
+end
+if enabled then
+local count,candidate,selectedCount=0,nil,0
+for _,name in ipairs(order) do if selected[name] then selectedCount+=1 end end
+if bag then
+for _,pet in ipairs(bag:GetDescendants()) do
+if selected[pet.Name] and pet.Parent and pet.Parent.Parent==bag then
+count+=1
+if not candidate and os.clock()>=(retryAt[pet] or 0) then candidate=pet end
+end
+end
+end
+local events=ReplicatedStorage:FindFirstChild("\114\069\118\101\110\116\115")
+local sell=events and events:FindFirstChild("\115\101\108\108\080\101\116\069\118\101\110\116")
+local equip=events and events:FindFirstChild("\101\113\117\105\112\080\101\116\069\118\101\110\116")
+if selectedCount==0 then status.Text="\083\101\108\101\099\105\111\110\101\032\112\101\108\111\032\109\101\110\111\115\032\117\109\032\112\101\116\032\112\097\114\097\032\118\101\110\100\101\114\046"
+elseif not bag then status.Text="\065\103\117\097\114\100\097\110\100\111\032\105\110\118\101\110\116\195\161\114\105\111\046\046\046"
+elseif not sell then status.Text="\069\118\101\110\116\111\032\100\101\032\118\101\110\100\097\032\105\110\100\105\115\112\111\110\195\173\118\101\108"
+elseif candidate and selected[candidate.Name] and alive and isAlive() and enabled then
+if equipped(candidate) then
+if equip then pcall(function()equip:FireServer("\117\110\101\113\117\105\112\080\101\116",candidate)end)end
+retryAt[candidate]=os.clock()+0.5
+status.Text="\068\101\115\101\113\117\105\112\097\110\100\111\058\032"..candidate.Name
+else
+local ok=pcall(function()sell:FireServer("\115\101\108\108\080\101\116",candidate)end)
+if ok then pending[candidate]=true end
+retryAt[candidate]=os.clock()+1
+status.Text=ok and "\067\111\110\102\105\114\109\097\110\100\111\032\118\101\110\100\097\058\032"..candidate.Name or "\070\097\108\104\097\032\110\097\032\118\101\110\100\097\059\032\116\101\110\116\097\110\100\111\032\110\111\118\097\109\101\110\116\101"
+end
+else status.Text="\082\101\115\116\097\110\116\101\115\058\032"..count.."\032\047\047\032\114\101\109\111\118\105\100\111\115\032\100\111\032\105\110\118\101\110\116\195\161\114\105\111\058\032"..removed end
+end
+task.wait(0.2)
+end
+end)
+Core:AddCleanup("\070\097\114\109\115\046\065\108\105\101\110\069\118\101\110\116",function()
+enabled,alive=false,false
+for _,connection in ipairs(connections) do connection:Disconnect() end
+Core:StopWorker("\070\097\114\109\115\046\065\108\105\101\110\065\117\116\111\083\101\108\108")
+end)
+end
+
 local function StartAlienDiscordBridge(Core)
 local env = getgenv and getgenv() or _G
 if env.ArasakaAlienMonitor and env.ArasakaAlienMonitor.stop then env.ArasakaAlienMonitor.stop() end
@@ -6422,6 +6544,7 @@ end
 
 MountAlienShop(alienScroll, Core, player, ReplicatedStorage, targetGui, playClickSound)
 StartAlienDiscordBridge(Core)
+MountAlienAutoSell(alienScroll, Core, player, ReplicatedStorage)
 end)()
 local function getActiveBossChestPrompt()
 if bossEventMode ~= "\065\108\105\101\110" then
@@ -7706,10 +7829,11 @@ vim:SendKeyEvent(false, Enum.KeyCode.E, false, game)
 end)
 end
 local holdNearBossChest
-local function collectBossChest()
+local function collectBossChest(shouldAbort)
+if shouldAbort and shouldAbort() then return false end
 if bossEventMode == "\065\108\105\101\110" and alienChestClaimed then return true end
 if bossEventMode == "\065\108\105\101\110" then
-local boss = workspace:FindFirstChild("\065\108\105\101\110\032\066\111\115\115")
+local boss = Core:FindAliveAlienBoss()
 if boss and (tonumber(boss:GetAttribute("\072\101\097\108\116\104")) or 0) > 0 then return false end
 end
 local prompt = getActiveBossChestPrompt()
@@ -7726,11 +7850,12 @@ if os.clock() - alienChestRequestedAt < 0.5 then return false end
 alienChestRequestedAt = os.clock()
  
 task.wait(0.3)
-if not autoFarmActive or bossEventMode ~= "\065\108\105\101\110" or FarmQuestPaused or not Core:IsAlive()
+if (shouldAbort and shouldAbort()) or not autoFarmActive or bossEventMode ~= "\065\108\105\101\110" or FarmQuestPaused or not Core:IsAlive()
 or player.Character ~= character or not prompt.Parent or not prompt.Enabled then return false end
  
  
 pressEChest(math.max(0.1, (tonumber(prompt.HoldDuration) or 0) + 0.1))
+if shouldAbort and shouldAbort() then return false end
 if not alienChestClaimed and fireproximityprompt then
 pcall(function() fireproximityprompt(prompt) end)
 end
@@ -7881,16 +8006,8 @@ return nil
 end
 local function getBossTargetPosition()
 if bossEventMode ~= "\065\108\105\101\110" then return getNormalBossTargetPosition() end
-local boss = workspace:FindFirstChild("\065\108\105\101\110\032\066\111\115\115")
-if not boss or not boss:IsA("\077\111\100\101\108") or boss:GetAttribute("\066\111\115\115\069\109\101\114\103\105\110\103") == true then return nil end
-local health = tonumber(boss:GetAttribute("\072\101\097\108\116\104"))
-local humanoid = boss:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
-if health ~= nil and health <= 0 then return nil end
-if humanoid and humanoid.Health <= 0 then return nil end
-if health == nil and not humanoid then return nil end
-local root = boss:FindFirstChild("\072\117\109\097\110\111\105\100\082\111\111\116\080\097\114\116") or boss.PrimaryPart
-or boss:FindFirstChild("\066\111\115\115\068\097\109\097\103\101\072\105\116\098\111\120") or boss:FindFirstChildWhichIsA("\066\097\115\101\080\097\114\116", true)
-if root then return root.Position, boss end
+local boss, root = Core:FindAliveAlienBoss()
+if boss and root then return root.Position, boss end
 end
 local bossCollisionStates = setmetatable({}, {__mode = "\107"})
 local function setNoclip(enabled)
@@ -8048,17 +8165,23 @@ refreshTrainingWatchdog()
 
 end
 local function startBossFarmRuntime()
+bossRuntimeEpoch += 1
+local runtimeEpoch = bossRuntimeEpoch
 Core:StopWorker("\070\097\114\109\115\046\066\111\115\115\080\111\115\105\116\105\111\110")
 Core:StopWorker("\070\097\114\109\115\046\066\111\115\115\065\116\116\097\099\107")
 resetBossCycleState()
 Core:StartWorker("\070\097\114\109\115\046\066\111\115\115\080\111\115\105\116\105\111\110", function(isAlive)
+local function stopped()
+return not isAlive() or not autoFarmActive or FarmQuestPaused or runtimeEpoch ~= bossRuntimeEpoch
+end
 local lastBossSeen = false
 local lastBossObject = nil
-while isAlive() and autoFarmActive and not FarmQuestPaused do
+while not stopped() do
 if not getBossTargetForFarm() then Core:SetBossInverted("\078\111\114\109\097\108", false) end
-if collectBossChest() then
+if collectBossChest(stopped) then
 bossChestCollected = true
 end
+if stopped() then return end
 local character = player.Character
 local hrp = character and character:FindFirstChild("\072\117\109\097\110\111\105\100\082\111\111\116\080\097\114\116")
 local humanoid = character and character:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
@@ -8073,9 +8196,10 @@ Core:SetBossInverted("\078\111\114\109\097\108", false)
 BossDamageHudState.BossAlive = false
 if bossEventMode == "\065\108\105\101\110" then setNoclip(false) end
 holdNearBossChest()
-if collectBossChest() then
+if collectBossChest(stopped) then
 bossChestCollected = true
 end
+if stopped() then return end
 if bossEventMode == "\065\108\105\101\110" and not bossChestCollected
 and (workspace:FindFirstChild("\065\108\105\101\110\032\067\104\101\115\116") or getActiveBossChestPrompt()) then
  
@@ -8088,16 +8212,17 @@ setAlienStatus("\098\097\195\186\032\105\110\100\105\115\112\111\110\195\173\118
 end
 if not bossChestCollected then
 holdNearBossChest()
-if collectBossChest() then
+if collectBossChest(stopped) then
 bossChestCollected = true
 end
 end
+if stopped() then return end
 holdBossTransition()
 setNoclip(false)
 RestoreFarmContext(function()
-return not isAlive() or not autoFarmActive or FarmQuestPaused
-or getBossTargetForFarm() ~= nil
+return stopped() or getBossTargetForFarm() ~= nil
 end)
+if stopped() then return end
 releaseBossChestHold()
 if isAlive() and autoFarmActive and not FarmQuestPaused
 and getBossTargetForFarm() ~= nil then
@@ -8130,6 +8255,7 @@ alienChestClaimed, alienChestRequestedAt = false, -math.huge
 alienApproachChest = nil
 pauseAllFarmsForBoss()
 jumpBeforeFarmReturn()
+if stopped() then return end
 end
 if bossEventMode == "\065\108\105\101\110" then setAlienStatus("\099\111\109\098\097\116\101\110\100\111\032\047\047\032\112\101\115\111\032\101\032\115\111\099\111") end
 releaseBossChestHold()
@@ -8151,12 +8277,17 @@ setNoclip(false)
 setAlienStatus("\098\111\115\115\032\100\101\114\114\111\116\097\100\111\032\047\047\032\097\103\117\097\114\100\097\110\100\111\032\098\097\195\186")
 end
 holdNearBossChest()
-if collectBossChest() then
+if collectBossChest(stopped) then
 bossChestCollected = true
 end
 else
 BossDamageHudState.BossAlive = false
-if bossEventMode == "\065\108\105\101\110" then setAlienStatus("\097\103\117\097\114\100\097\110\100\111\032\065\108\105\101\110\032\066\111\115\115") end
+if bossEventMode == "\065\108\105\101\110" then
+local boss = Core:FindAliveAlienBoss() or workspace:FindFirstChild("\065\108\105\101\110\032\066\111\115\115")
+if not boss then setAlienStatus("\097\103\117\097\114\100\097\110\100\111\032\065\108\105\101\110\032\066\111\115\115\032\047\047\032\109\111\100\101\108\111\032\097\105\110\100\097\032\110\195\163\111\032\114\101\112\108\105\099\097\100\111")
+elseif boss:GetAttribute("\066\111\115\115\069\109\101\114\103\105\110\103") == true then setAlienStatus("\065\108\105\101\110\032\066\111\115\115\032\097\112\097\114\101\099\101\110\100\111\032\047\047\032\097\103\117\097\114\100\097\110\100\111\032\102\105\099\097\114\032\118\117\108\110\101\114\195\161\118\101\108")
+else setAlienStatus("\065\108\105\101\110\032\100\101\116\101\099\116\097\100\111\032\047\047\032\097\103\117\097\114\100\097\110\100\111\032\118\105\100\097\032\111\117\032\112\111\115\105\195\167\195\163\111\032\118\195\161\108\105\100\097") end
+end
 setNoclip(false)
 end
 end
@@ -8164,6 +8295,7 @@ end
 if not humanoid or humanoid.Health <= 0 then Core:SetBossInverted("\078\111\114\109\097\108", false) end
 RunService.Heartbeat:Wait()
 end
+if runtimeEpoch ~= bossRuntimeEpoch or not isAlive() then return end
 Core:SetBossInverted("\078\111\114\109\097\108", false)
 BossDamageHudState.BossAlive = false
 releaseBossChestHold()
@@ -8411,7 +8543,14 @@ end)
 refreshBossConfigButtonText()
 local function setBossFarmEnabled(enabled, mode)
 autoFarmActive = enabled
-if enabled then bossEventMode = mode end
+if enabled then bossEventMode = mode else bossRuntimeEpoch += 1 end
+if not enabled then
+btnFarm.Text = "\065\085\084\079\032\070\065\082\077\032\066\079\083\083\058\032\079\070\070\032\240\159\148\180"
+btnFarm.BackgroundColor3 = Color3.fromRGB(180,30,30)
+btnAlienFarm.Text = "\065\085\084\079\032\065\076\073\069\078\032\066\079\083\083\058\032\079\070\070\032\240\159\148\180"
+btnAlienFarm.BackgroundColor3 = Color3.fromRGB(180,30,30)
+setAlienStatus("\100\101\115\097\116\105\118\097\100\111\032\047\047\032\114\101\115\116\097\117\114\097\110\100\111\032\102\097\114\109\032\097\110\116\101\114\105\111\114")
+end
 BossDamageHudState.AutoBossEnabled = autoFarmActive
 if autoFarmActive then
 currentOffsetY = 45
@@ -8436,28 +8575,50 @@ Core:StopWorker("\070\097\114\109\115\046\066\111\115\115\065\116\116\097\099\10
 setNoclip(false)
 if bossCycleInArena or bossReturnDeadline then
 pcall(jumpBeforeFarmReturn)
-pcall(RestoreFarmContext)
+pcall(function() RestoreFarmContext(function() return not Core:IsAlive() end) end)
 end
 resetBossCycleState()
+resumeAllFarmsAfterBoss()
 damageCount = 0
 currentOffsetY = 45
 btnFarm.Text = "\065\085\084\079\032\070\065\082\077\032\066\079\083\083\058\032\079\070\070\032\240\159\148\180"
 btnFarm.BackgroundColor3 = Color3.fromRGB(180, 30, 30)
 end
-if not enabled then bossEventMode = "\078\111\114\109\097\108" end
+ 
 local alienOn = autoFarmActive and bossEventMode == "\065\108\105\101\110"
 btnAlienFarm.Text = alienOn and "\065\085\084\079\032\065\076\073\069\078\032\066\079\083\083\058\032\079\078\032\240\159\159\162" or "\065\085\084\079\032\065\076\073\069\078\032\066\079\083\083\058\032\079\070\070\032\240\159\148\180"
 btnAlienFarm.BackgroundColor3 = alienOn and Color3.fromRGB(40, 160, 40) or Color3.fromRGB(180, 30, 30)
 setAlienStatus(alienOn and "\097\103\117\097\114\100\097\110\100\111\032\065\108\105\101\110\032\066\111\115\115" or "\100\101\115\097\116\105\118\097\100\111")
 end
+local bossToggleBusy, lastBossToggleAt = false, -math.huge
 local function toggleBossMode(mode)
+if bossToggleBusy or os.clock() - lastBossToggleAt < 0.4 then return end
+bossToggleBusy, lastBossToggleAt = true, os.clock()
 playClickSound()
+local ok, err = pcall(function()
 if autoFarmActive then
 local previous = bossEventMode
 setBossFarmEnabled(false, previous)
 if previous == mode then return end
 end
 setBossFarmEnabled(true, mode)
+end)
+lastBossToggleAt, bossToggleBusy = os.clock(), false
+if not ok then
+autoFarmActive = false
+bossRuntimeEpoch += 1
+Core:StopWorker("\070\097\114\109\115\046\066\111\115\115\083\117\112\101\114\118\105\115\111\114")
+Core:StopWorker("\070\097\114\109\115\046\066\111\115\115\080\111\115\105\116\105\111\110")
+Core:StopWorker("\070\097\114\109\115\046\066\111\115\115\065\116\116\097\099\107")
+setNoclip(false)
+pcall(resetBossCycleState)
+pcall(resumeAllFarmsAfterBoss)
+BossDamageHudState.AutoBossEnabled, BossDamageHudState.BossAlive = false, false
+btnFarm.Text, btnAlienFarm.Text = "\065\085\084\079\032\070\065\082\077\032\066\079\083\083\058\032\079\070\070\032\240\159\148\180", "\065\085\084\079\032\065\076\073\069\078\032\066\079\083\083\058\032\079\070\070\032\240\159\148\180"
+btnFarm.BackgroundColor3, btnAlienFarm.BackgroundColor3 = Color3.fromRGB(180,30,30), Color3.fromRGB(180,30,30)
+setAlienStatus("\101\114\114\111\032\097\111\032\097\108\116\101\114\097\114\032\109\111\100\111\032\047\047\032\118\101\106\097\032\111\032\099\111\110\115\111\108\101")
+warn("\091\065\082\065\083\065\075\065\093\091\066\079\083\083\032\084\079\071\071\076\069\093", err)
+end
 end
 btnFarm.MouseButton1Click:Connect(function() toggleBossMode("\078\111\114\109\097\108") end)
 btnAlienFarm.MouseButton1Click:Connect(function() toggleBossMode("\065\108\105\101\110") end)
@@ -8965,10 +9126,10 @@ local image = entry and entry:FindFirstChild("\105\109\097\103\101")
 if image and (image:IsA("\073\109\097\103\101\076\097\098\101\108") or image:IsA("\073\109\097\103\101\066\117\116\116\111\110")) and image.Image ~= "" then statIcons[stat] = image.Image end
 end
 end)
-local C = {red = Color3.fromRGB(236, 64, 88), white = Color3.fromRGB(244, 244, 248),
-gray = Color3.fromRGB(155, 151, 164), bg = Color3.fromRGB(9, 9, 11),
-card = Color3.fromRGB(24, 23, 28), selected = Color3.fromRGB(55, 22, 31),
-green = Color3.fromRGB(111, 219, 174), line = Color3.fromRGB(53, 36, 44)}
+local C = {red = Color3.fromRGB(180,30,30), white = Color3.fromRGB(245,245,245),
+gray = Color3.fromRGB(180,180,180), bg = Color3.fromRGB(10,10,10),
+card = Color3.fromRGB(14,14,14), selected = Color3.fromRGB(45,15,18),
+green = Color3.fromRGB(40,160,40), line = Color3.fromRGB(42,42,42)}
 local mounted, busy, stopRequested = true, false, false
 local selectedPet, selectedKey, selectedTier, popup = nil, nil, nil, nil
 local connections, popupConnections = {}, {}
@@ -9250,7 +9411,7 @@ end
 resultLabel.Text, resultLabel.TextColor3 = summary.Text, summary.TextColor3
 spinLabel.Text = spinBalance ~= nil and ("\071\073\082\079\083\032\082\069\083\084\065\078\084\069\083\058\032" .. spinBalance) or "\085\115\097\032\111\115\032\103\105\114\111\115\032\100\111\032\106\111\103\111\046"
 auto.Text = busy and "\065\085\084\079\032\083\080\073\078\058\032\079\078" or "\065\085\084\079\032\083\080\073\078\058\032\079\070\070"
-auto.BackgroundColor3 = busy and Color3.fromRGB(42, 110, 76) or C.red
+auto.BackgroundColor3 = busy and C.green or C.red
 paintFolders()
 for pet, pair in pairs(renderedCards) do
 pair[1].Color = pet == selectedPet and C.red or pair[2]
@@ -12047,7 +12208,7 @@ return formatted
 end
 local function getActiveBossDamageFolder()
 if BossDamageHudState.Mode == "\065\108\105\101\110" then
-local alien = workspace:FindFirstChild("\065\108\105\101\110\032\066\111\115\115")
+local alien = Core:FindAliveAlienBoss()
 return alien, alien and alien:FindFirstChild("\100\097\109\097\103\101\086\097\108\117\101\115")
 end
 local events = workspace:FindFirstChild("\069\118\101\110\116\115")
