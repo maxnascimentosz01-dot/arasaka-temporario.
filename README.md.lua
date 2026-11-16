@@ -6272,6 +6272,8 @@ local CaptureBossReturnContext = function() return false end
 local FarmQuestPaused = false
 local BossPriorityNow = function() return false end
 local BossAutoEnabled = function() return false end
+ 
+local getBossTargetForFarm, equipPunch, queueBossWeight
 function Farms:Init()
 Utils.PerfBegin("\070\065\082\077\083\095\085\073")
 local MAX_EQUIPPED_PETS = 12
@@ -8058,7 +8060,7 @@ btnMainStrengthOp.BackgroundColor3 = Color3.fromRGB(14, 14, 14)
 end
 end)
 local bossWeightPulseId = 0
-local function queueBossWeight(stillFighting)
+queueBossWeight = function(stillFighting)
 bossWeightPulseId += 1
 local pulseId = bossWeightPulseId
 local character = player.Character
@@ -8083,7 +8085,7 @@ pcall(function() humanoid:EquipTool(tool) end)
 end
 end)
 end
-local function equipPunch()
+equipPunch = function()
 local character = player.Character
 if not character then return nil end
 local humanoid = character:FindFirstChildOfClass("\072\117\109\097\110\111\105\100")
@@ -8368,7 +8370,7 @@ local bossCycleInArena = false
 local bossReturnDeadline = nil
 local bossChestCollected = false
 local bossFarmPauseSnapshot = nil
-local function getBossTargetForFarm()
+getBossTargetForFarm = function()
 return getBossTargetPosition()
 end
 BossAutoEnabled = function() return autoFarmActive and bossEventMode == "\078\111\114\109\097\108" end
@@ -9273,16 +9275,25 @@ function Enchantments:Init()
 Utils.PerfBegin("\069\078\067\065\078\084\065\077\069\078\084\079\083\095\085\073")
 local container = tabEnchant
 local questScroll = Instance.new("\083\099\114\111\108\108\105\110\103\070\114\097\109\101", container)
+questScroll.Name = "\069\110\099\104\097\110\116\109\101\110\116\115\083\099\114\111\108\108"
+questScroll.Active = true
+questScroll.ScrollingEnabled = true
+questScroll.ScrollingDirection = Enum.ScrollingDirection.Y
+questScroll.ElasticBehavior = Enum.ElasticBehavior.Never
+questScroll.BorderSizePixel = 0
+questScroll.CanvasSize = UDim2.new()
+questScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 questScroll.Size = UDim2.new(1, -20, 1, -10)
 questScroll.Position = UDim2.new(0, 10, 0, 5)
 questScroll.BackgroundTransparency = 1
-questScroll.ScrollBarThickness = 4
+questScroll.ScrollBarThickness = UserInputService.TouchEnabled and 7 or 4
 local qLayout = Instance.new("\085\073\076\105\115\116\076\097\121\111\117\116", questScroll)
 qLayout.Padding = UDim.new(0, 7)
 qLayout.SortOrder = Enum.SortOrder.LayoutOrder
-qLayout:GetPropertyChangedSignal("\065\098\115\111\108\117\116\101\067\111\110\116\101\110\116\083\105\122\101"):Connect(function()
-questScroll.CanvasSize = UDim2.new(0, 0, 0, qLayout.AbsoluteContentSize.Y + 20)
-end)
+ 
+ 
+local padding = Instance.new("\085\073\080\097\100\100\105\110\103", questScroll)
+padding.PaddingBottom = UDim.new(0, 20)
 ;(function()
  
 local PetAutoSpin = {}
@@ -9626,7 +9637,10 @@ Text = "", ClearTextOnFocus = false, Font = Enum.Font.Gotham, TextSize = 11, Bor
 corner(search)
 local grid = mk("\083\099\114\111\108\108\105\110\103\070\114\097\109\101", {Name = "\069\110\099\104\097\110\116\080\101\116\115\071\114\105\100", Position = UDim2.fromOffset(12, 105),
 Size = UDim2.fromOffset(494, 433), BackgroundTransparency = 1, BorderSizePixel = 0,
-ScrollBarThickness = 4, ScrollBarImageColor3 = C.red, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y}, panel)
+Active = true, ScrollingEnabled = true, ScrollingDirection = Enum.ScrollingDirection.Y,
+ElasticBehavior = Enum.ElasticBehavior.Never,
+ScrollBarThickness = UserInputService.TouchEnabled and 7 or 4, ScrollBarImageColor3 = C.red,
+CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y}, panel)
 mk("\085\073\071\114\105\100\076\097\121\111\117\116", {CellSize = UDim2.fromOffset(238, 173), CellPadding = UDim2.fromOffset(7, 7), SortOrder = Enum.SortOrder.LayoutOrder}, grid)
 local pageText = text(panel, "", UDim2.fromOffset(14, 554), UDim2.fromOffset(340, 25), C.gray, 10)
 local back = button(panel, "\060", UDim2.fromOffset(405, 550), UDim2.fromOffset(44, 29))
@@ -9646,7 +9660,8 @@ end
 text(detail, "\080\065\083\083\073\086\065\032\069\032\078\195\141\086\069\076", UDim2.fromOffset(12, 116), UDim2.new(1, -24, 0, 40), C.red, 9)
 local tree = mk("\083\099\114\111\108\108\105\110\103\070\114\097\109\101", {Name = "\080\097\115\116\097\115\068\101\080\097\115\115\105\118\097\115", Position = UDim2.fromOffset(10, 151),
 Size = UDim2.new(1, -20, 0, 243), BackgroundTransparency = 1, BorderSizePixel = 0,
-ScrollBarThickness = 3, ScrollBarImageColor3 = C.red, CanvasSize = UDim2.new(),
+Active = true, ScrollingEnabled = true, ElasticBehavior = Enum.ElasticBehavior.Never,
+ScrollBarThickness = UserInputService.TouchEnabled and 7 or 3, ScrollBarImageColor3 = C.red, CanvasSize = UDim2.new(),
 AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollingDirection = Enum.ScrollingDirection.Y}, detail)
 mk("\085\073\076\105\115\116\076\097\121\111\117\116", {Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder}, tree)
 mk("\085\073\080\097\100\100\105\110\103", {PaddingBottom = UDim.new(0, 4), PaddingLeft = UDim.new(0, 2), PaddingRight = UDim.new(0, 6)}, tree)
@@ -10649,7 +10664,7 @@ questWorkDeadline = os.clock() + QUEST_MAX_SECONDS
 PauseFarmsForQuest()
 return true
 end
-local function releaseQuestControl()
+local function releaseQuestControl(reason)
 if not sessionOwnsFarm or questReleaseBusy then return end
 questReleaseBusy = true
 local releaseOk, releaseErr = pcall(function()
@@ -10658,7 +10673,7 @@ setStatus("\066\111\115\115\032\112\114\105\111\114\105\116\195\161\114\105\111\
 setQuestNoclip(false)
 ResumeFarmsAfterQuest()
 else
-setStatus("\113\117\101\115\116\032\108\105\098\101\114\097\100\097\032\047\047\032\114\101\115\116\097\117\114\097\110\100\111\032\116\114\101\105\110\111\032\097\110\116\101\114\105\111\114")
+setStatus((reason or "\113\117\101\115\116\032\105\110\116\101\114\114\111\109\112\105\100\097") .. "\032\047\047\032\114\101\115\116\097\117\114\097\110\100\111\032\116\114\101\105\110\111\032\097\110\116\101\114\105\111\114")
 setQuestNoclip(false)
 jumpForQuest()
 task.wait(2)
@@ -10726,11 +10741,12 @@ if AUTO and token == runToken and quest.Parent and isComplete(quest) then
 claimQuest(quest)
 end
 elseif acquireQuestControl() then
-local okQuest, _, reason = pcall(runQuest, quest, token)
+local okQuest, result, reason = pcall(runQuest, quest, token)
 if not okQuest then
+warn("\091\065\082\065\083\065\075\065\093\091\065\085\084\079\032\081\085\069\083\084\093\032" .. quest.Name .. "\058\032" .. tostring(result))
 setStatus("\101\114\114\111\032\097\111\032\101\120\101\099\117\116\097\114\032\113\117\101\115\116\032\047\047\032\114\101\115\116\097\117\114\097\110\100\111\032\102\097\114\109\115")
 end
-releaseQuestControl()
+releaseQuestControl(not okQuest and "\101\114\114\111\032\110\097\032\113\117\101\115\116" or (result and "\113\117\101\115\116\032\099\111\110\099\108\117\195\173\100\097" or "\113\117\101\115\116\032\112\101\110\100\101\110\116\101"))
 if not okQuest or (quest.Parent and not isComplete(quest)) then
 questRetryAfter = os.clock() + QUEST_RETRY_COOLDOWN
 end
@@ -10738,16 +10754,20 @@ if reason == "\117\110\115\117\112\112\111\114\116\101\100" then blockedQuest = 
 end
 end
 elseif kind == "\066\082\065\087\076" then
-local okQuest, _, reason = pcall(runQuest, quest, token)
+local okQuest, result, reason = pcall(runQuest, quest, token)
 if not okQuest then
+warn("\091\065\082\065\083\065\075\065\093\091\065\085\084\079\032\081\085\069\083\084\093\032" .. quest.Name .. "\058\032" .. tostring(result))
 setStatus("\102\097\108\104\097\032\101\109\032\066\114\097\119\108\032\047\047\032\099\111\110\116\105\110\117\097\110\100\111\032\102\097\114\109\115")
 questRetryAfter = os.clock() + QUEST_RETRY_COOLDOWN
 end
 if reason == "\117\110\115\117\112\112\111\114\116\101\100" then blockedQuest = quest end
 elseif acquireQuestControl() then
-local okQuest, _, reason = pcall(runQuest, quest, token)
-if not okQuest then setStatus("\101\114\114\111\032\110\097\032\113\117\101\115\116\032\047\047\032\114\101\115\116\097\117\114\097\110\100\111\032\102\097\114\109\115") end
-releaseQuestControl()
+local okQuest, result, reason = pcall(runQuest, quest, token)
+if not okQuest then
+warn("\091\065\082\065\083\065\075\065\093\091\065\085\084\079\032\081\085\069\083\084\093\032" .. quest.Name .. "\058\032" .. tostring(result))
+setStatus("\101\114\114\111\032\110\097\032\113\117\101\115\116\032\047\047\032\114\101\115\116\097\117\114\097\110\100\111\032\102\097\114\109\115")
+end
+releaseQuestControl(not okQuest and "\101\114\114\111\032\110\097\032\113\117\101\115\116" or (result and "\113\117\101\115\116\032\099\111\110\099\108\117\195\173\100\097" or "\113\117\101\115\116\032\112\101\110\100\101\110\116\101"))
 if not okQuest or (quest.Parent and not isComplete(quest)) then
 questRetryAfter = os.clock() + QUEST_RETRY_COOLDOWN
 end
