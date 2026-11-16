@@ -4054,6 +4054,58 @@ local edition = "\080\114\101\109\105\117\109"
 local alive, connected, socket, connecting = true, false, nil, false
 local epoch, retryAt, backoff, lastSend = 0, 0, 2, -math.huge
 local allConnections, socketConnections, messages, seen, seenOrder = {}, {}, {}, {}, {}
+local HISTORY_LIMIT = 75
+local cacheEnv = (getgenv and getgenv()) or _G
+cacheEnv.ArasakaChatHistoryV1 = cacheEnv.ArasakaChatHistoryV1 or {}
+local cacheKey = endpoint .. "\058" .. tostring(player.UserId)
+local cacheFile = "\065\114\097\115\097\107\097\095\067\104\097\116\095\072\105\115\116\111\114\105\099\111\095" .. tostring(player.UserId) .. "\046\106\115\111\110"
+local history, historyById = {}, {}
+local function remember(data)
+if type(data) ~= "\116\097\098\108\101" or type(data.id) ~= "\115\116\114\105\110\103" or #data.id > 160
+or type(data.text) ~= "\115\116\114\105\110\103" or #data.text > 3200 or historyById[data.id] then return false end
+local stamp = tonumber(data.at) or 0
+if stamp ~= stamp or math.abs(stamp) == math.huge then stamp = 0 end
+local entry = {id=data.id, text=data.text, at=stamp,
+userId=tostring(data.userId or ""):sub(1,32), name=tostring(data.name or "\074\111\103\097\100\111\114"):sub(1,64),
+displayName=tostring(data.displayName or data.name or "\074\111\103\097\100\111\114"):sub(1,200),
+edition=tostring(data.edition or "\071\114\195\161\116\105\115"):sub(1,32)}
+historyById[entry.id] = entry
+local index = #history + 1
+while index > 1 and history[index-1].at > stamp do index -= 1 end
+table.insert(history, index, entry)
+while #history > HISTORY_LIMIT do historyById[table.remove(history,1).id] = nil end
+return historyById[entry.id] ~= nil
+end
+local function restore(entries)
+if type(entries) ~= "\116\097\098\108\101" then return end
+for _, entry in ipairs(entries) do remember(entry) end
+end
+pcall(function()
+if type(isfile)=="\102\117\110\099\116\105\111\110" and type(readfile)=="\102\117\110\099\116\105\111\110" and isfile(cacheFile) then
+local raw=readfile(cacheFile)
+if #raw <= 400000 then
+local saved=Http:JSONDecode(raw)
+if type(saved)=="\116\097\098\108\101" and saved.endpoint==endpoint then restore(saved.messages) end
+end
+end
+end)
+restore(cacheEnv.ArasakaChatHistoryV1[cacheKey])
+cacheEnv.ArasakaChatHistoryV1[cacheKey] = history
+local function flushHistory()
+if type(writefile)=="\102\117\110\099\116\105\111\110" then
+pcall(function() writefile(cacheFile,Http:JSONEncode({endpoint=endpoint,messages=history})) end)
+end
+end
+local savePending = false
+local function saveHistory()
+if savePending then return end
+savePending=true
+task.delay(0.4,function()
+savePending=false
+if alive then flushHistory() end
+end)
+end
+
 local function make(class, props, parent)
 local obj = Instance.new(class)
 for k,v in pairs(props) do obj[k]=v end
@@ -4089,8 +4141,12 @@ local function setStatus(text)
 if alive and status.Parent then status.Text=text end
 end
 local sequence=0
+local cardsById = {}
 local function addMessage(data)
 if not alive or type(data)~="\116\097\098\108\101" or type(data.id)~="\115\116\114\105\110\103" or seen[data.id] or type(data.text)~="\115\116\114\105\110\103" then return end
+if not historyById[data.id] and not remember(data) then return end
+saveHistory()
+local wasAtBottom = #messages == 0 or list.CanvasPosition.Y >= math.max(0,list.AbsoluteCanvasSize.Y-list.AbsoluteWindowSize.Y)-32
 seen[data.id]=true;table.insert(seenOrder,data.id)
 if #seenOrder>160 then seen[table.remove(seenOrder,1)]=nil end
 sequence+=1
@@ -4112,11 +4168,20 @@ TextColor3=Color3.fromRGB(230,85,85),TextXAlignment=Enum.TextXAlignment.Left},co
 make("\084\101\120\116\076\097\098\101\108",{Name="\067\104\097\116\077\101\115\115\097\103\101\066\111\100\121",Text=data.text,LayoutOrder=2,Size=UDim2.new(1,0,0,0),AutomaticSize=Enum.AutomaticSize.Y,TextWrapped=true,
 BackgroundTransparency=1,TextColor3=Color3.fromRGB(235,235,235),TextXAlignment=Enum.TextXAlignment.Left},content)
 table.insert(messages,card)
-if #messages>60 then table.remove(messages,1):Destroy() end
+cardsById[data.id]=card
+for id, oldCard in pairs(cardsById) do
+if not historyById[id] then oldCard:Destroy();cardsById[id]=nil end
+end
+messages={}
+for order, entry in ipairs(history) do
+local existing=cardsById[entry.id]
+if existing then existing.LayoutOrder=order;table.insert(messages,existing) end
+end
 task.defer(function()
-if alive and list.Parent then list.CanvasPosition=Vector2.new(0,math.max(0,list.AbsoluteCanvasSize.Y-list.AbsoluteWindowSize.Y)) end
+if alive and list.Parent and wasAtBottom then list.CanvasPosition=Vector2.new(0,math.max(0,list.AbsoluteCanvasSize.Y-list.AbsoluteWindowSize.Y)) end
 end)
 end
+for _, entry in ipairs(history) do addMessage(entry) end
 local function closeSocket()
 for _,c in ipairs(socketConnections) do c:Disconnect() end
 socketConnections={}
@@ -4178,6 +4243,7 @@ connect(send.MouseButton1Click,sendMessage)
 connect(input.FocusLost,function(enter)if enter then sendMessage()end end)
 Core:AddCleanup("\067\104\097\116",function()
 if not alive then return end
+flushHistory()
 alive=false;epoch+=1;closeSocket()
 Core:StopWorker("\067\104\097\116\046\067\111\110\110\101\099\116\105\111\110\071\117\097\114\100")
 for _,c in ipairs(allConnections)do c:Disconnect()end
@@ -5464,7 +5530,7 @@ header.LayoutOrder = 1
 header.Size = UDim2.new(1, -6, 0, 42)
 header.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
 header.BorderSizePixel = 0
-header.Text = "\032\032\240\159\147\138\032\067\065\076\067\085\076\065\068\079\082\065\032\047\047\032\065\077\079\083\084\082\065\032\082\069\065\076\032\068\069\032\049\032\077\073\078\085\084\079"
+header.Text = "\032\032\240\159\147\138\032\067\065\076\067\085\076\065\068\079\082\065\032\047\047\032\083\084\065\084\085\083\032\069\032\071\065\078\072\079\083\032\068\079\032\084\082\069\073\078\079"
 header.TextColor3 = Color3.fromRGB(244, 247, 252)
 header.Font = Enum.Font.GothamBlack
 header.TextSize = 12
@@ -5496,7 +5562,7 @@ end
 local function makeCard(title, order)
 local card = Instance.new("\070\114\097\109\101", scroll)
 card.LayoutOrder = order
-card.Size = UDim2.new(1, -6, 0, 88)
+card.Size = UDim2.new(1, -6, 0, 110)
 card.BackgroundColor3 = Color3.fromRGB(10, 10, 12)
 card.BorderSizePixel = 0
 Instance.new("\085\073\067\111\114\110\101\114", card).CornerRadius = UDim.new(0, 4)
@@ -5517,7 +5583,7 @@ name.Font = Enum.Font.GothamBold
 name.TextSize = 14
 name.TextXAlignment = Enum.TextXAlignment.Left
 local values = Instance.new("\084\101\120\116\076\097\098\101\108", card)
-values.Size = UDim2.new(1, -28, 0, 48)
+values.Size = UDim2.new(1, -28, 0, 72)
 values.Position = UDim2.new(0, 14, 0, 31)
 values.BackgroundTransparency = 1
 values.Text = "\065\071\085\065\082\068\065\078\068\079\032\049\032\077\073\078\085\084\079\032\068\069\032\084\082\069\073\078\079\046\046\046"
@@ -5525,6 +5591,7 @@ values.TextColor3 = Color3.fromRGB(195, 204, 218)
 values.Font = Enum.Font.GothamBold
 values.TextSize = 13
 values.TextXAlignment = Enum.TextXAlignment.Left
+values.TextWrapped = true
 values.TextYAlignment = Enum.TextYAlignment.Top
 return values
 end
@@ -5534,97 +5601,89 @@ Dura = makeCard("\240\159\155\161\239\184\143\032\068\085\082\065\066\073\076\07
 Agil = makeCard("\226\154\161\032\065\071\073\076\073\068\065\068\069", 5),
 Rebirths = makeCard("\240\159\148\132\032\082\069\078\065\083\067\073\077\069\078\084\079\083", 6)
 }
-local TRAINING_GRACE_SECONDS = 5
-local POLL_SECONDS = 0.25
+ 
 local samplers = {
-Forca = {
-read = function() return rawStat("\077\117\115\099\108\101", "\083\116\114\101\110\103\116\104") end,
-label = labels.Forca,
-name = "\070\079\082\195\135\065"
-},
-Dura = {
-read = function() return rawStat("\068\117\114\097\098\105\108\105\116\121") end,
-label = labels.Dura,
-name = "\068\085\082\065\066\073\076\073\068\065\068\069"
-},
-Agil = {
-read = function() return rawStat("\065\103\105\108\105\116\121", "\083\112\101\101\100") end,
-label = labels.Agil,
-name = "\065\071\073\076\073\068\065\068\069"
-},
-Rebirths = {
-read = function() return rawStat("\082\101\098\105\114\116\104\115", "\082\101\098\105\114\116\104") end,
-label = labels.Rebirths,
-name = "\082\069\078\065\083\067\073\077\069\078\084\079\083"
+{read = function() return rawStat("\077\117\115\099\108\101", "\083\116\114\101\110\103\116\104") end, label = labels.Forca},
+{read = function() return rawStat("\068\117\114\097\098\105\108\105\116\121") end, label = labels.Dura},
+{read = function() return rawStat("\065\103\105\108\105\116\121", "\083\112\101\101\100") end, label = labels.Agil},
+{read = function() return rawStat("\082\101\098\105\114\116\104\115", "\082\101\098\105\114\116\104") end, label = labels.Rebirths}
 }
-}
-for _, s in pairs(samplers) do
-s.previous = s.read()
-s.gain = 0
-s.activeTime = 0
-s.started = false
-s.lastGainAt = nil
-s.lastLoopAt = os.clock()
+local state = {enabled = true, elapsed = 0, started = false, last = os.clock(), nextAverage = 5}
+local function control(text, order)
+local button = Instance.new("\084\101\120\116\066\117\116\116\111\110", scroll)
+button.LayoutOrder = order
+button.Size = UDim2.new(1, -6, 0, 34)
+button.BackgroundColor3 = Color3.fromRGB(85, 18, 24)
+button.TextColor3 = Color3.fromRGB(245, 245, 245)
+button.Font = Enum.Font.GothamBold
+button.TextSize = 13
+button.Text = text
+Instance.new("\085\073\067\111\114\110\101\114", button).CornerRadius = UDim.new(0, 4)
+return button
 end
-local function formatActiveTime(sec)
-sec = math.max(0, math.floor(sec or 0))
-local h = math.floor(sec / 3600)
-local m = math.floor((sec % 3600) / 60)
-local ss = sec % 60
-return string.format("\037\048\050\100\104\032\037\048\050\100\109\032\037\048\050\100\115", h, m, ss)
+local pauseButton = control("\080\065\085\083\065\082\032\077\069\068\073\195\135\195\131\079", 7)
+local resetButton = control("\090\069\082\065\082\032\067\195\129\076\067\085\076\079\083", 8)
+local function render()
+for _, sample in ipairs(samplers) do
+local rate = sample.rate or 0
+sample.label.Text = string.format(
+"\065\084\085\065\076\032\037\115\032\032\124\032\032\071\065\078\072\079\032\043\037\115\010\037\115\047\115\032\032\124\032\032\037\115\047\109\105\110\032\032\124\032\032\037\115\047\104\010\037\115\047\100\105\097\032\032\124\032\032\037\115\047\115\101\109\097\110\097",
+nice(sample.current), nice(sample.gain), nice(rate), nice(rate * 60),
+nice(rate * 3600), nice(rate * 86400), nice(rate * 604800))
+if sample.rate == nil then
+sample.label.Text = string.format("\065\084\085\065\076\032\037\115\032\032\124\032\032\071\065\078\072\079\032\043\037\115\010\077\195\137\068\073\065\058\032\065\071\085\065\082\068\065\078\068\079\032\053\032\083\069\071\085\078\068\079\083\032\068\069\032\077\069\068\073\195\135\195\131\079", nice(sample.current), nice(sample.gain))
 end
-local function updateSampler(s)
-if not s.started or s.gain <= 0 or s.activeTime <= 0 then
-return
 end
-local perSecond = s.gain / math.max(0.001, s.activeTime)
-s.label.Text = string.format(
-"\077\073\078\085\084\079\032\032\037\115\010\072\079\082\065\032\032\037\115\032\032\032\032\124\032\032\032\032\068\073\065\032\032\037\115\032\032\032\032\124\032\032\032\032\083\069\077\065\078\065\032\032\037\115",
-nice(perSecond * 60),
-nice(perSecond * 3600),
-nice(perSecond * 86400),
-nice(perSecond * 604800)
-)
+info.Text = (not state.enabled and "\080\065\085\083\065\068\079" or (state.started and "\077\069\068\073\078\068\079" or "\065\071\085\065\082\068\065\078\068\079\032\080\082\073\077\069\073\082\079\032\071\065\078\072\079"))
+.. string.format("\032\047\047\032\084\069\077\080\079\032\037\048\050\100\104\032\037\048\050\100\109\032\037\048\050\100\115\032\047\047\032\077\195\137\068\073\065\032\068\065\032\083\069\083\083\195\131\079", math.floor(state.elapsed / 3600), math.floor(state.elapsed / 60) % 60, math.floor(state.elapsed) % 60)
 end
+local function reset()
+state.elapsed, state.started, state.last, state.nextAverage = 0, false, os.clock(), 5
+for _, sample in ipairs(samplers) do
+sample.current = sample.read()
+sample.previous, sample.gain, sample.rate = sample.current, 0, nil
+end
+render()
+end
+local function poll()
+local now = os.clock()
+local dt = math.max(0, now - state.last)
+state.last = now
+for _, sample in ipairs(samplers) do
+local current = sample.read()
+local delta = current - sample.previous
+sample.previous, sample.current = current, current
+if state.enabled and delta > 0 then
+sample.gain += delta
+state.started = true
+end
+end
+if state.enabled and state.started then
+ 
+state.elapsed += dt
+end
+if state.enabled and state.elapsed >= state.nextAverage then
+for _, sample in ipairs(samplers) do
+sample.rate = sample.gain / state.elapsed
+end
+state.nextAverage = state.elapsed + 5
+end
+render()
+end
+reset()
+Core:TrackConnection("\085\073", pauseButton.MouseButton1Click:Connect(function()
+poll()
+state.enabled = not state.enabled
+state.last = os.clock()
+pauseButton.Text = state.enabled and "\080\065\085\083\065\082\032\077\069\068\073\195\135\195\131\079" or "\067\079\078\084\073\078\085\065\082\032\077\069\068\073\195\135\195\131\079"
+render()
+end))
+Core:TrackConnection("\085\073", resetButton.MouseButton1Click:Connect(reset))
 Core:StartWorker("\085\073\046\067\097\108\099\117\108\097\116\111\114", function(isAlive)
 while isAlive() and tab.Parent do
-local now = os.clock()
-pcall(function()
-local activeNames = {}
-local longestActive = 0
-for _, s in pairs(samplers) do
-local dt = math.max(0, now - (s.lastLoopAt or now))
-s.lastLoopAt = now
-local current = s.read()
-local delta = current - (s.previous or current)
-s.previous = current
-if delta > 0 then
-if not s.started then
-s.started = true
-s.gain = 0
-s.activeTime = 0
-end
-s.gain += delta
-s.lastGainAt = now
-end
-if s.started and s.lastGainAt and (now - s.lastGainAt) <= TRAINING_GRACE_SECONDS then
-s.activeTime += dt
-table.insert(activeNames, s.name)
-if s.activeTime > longestActive then
-longestActive = s.activeTime
-end
-end
-updateSampler(s)
-end
-if #activeNames > 0 then
-info.Text = table.concat(activeNames, "\032\043\032")
-.. "\032\047\047\032\084\082\069\073\078\079\032\068\069\084\069\067\084\065\068\079\032\047\047\032\084\069\077\080\079\032\065\084\073\086\079\032"
-.. formatActiveTime(longestActive)
-else
-info.Text = "\065\071\085\065\082\068\065\078\068\079\032\084\082\069\073\078\079\032\047\047\032\083\195\147\032\067\079\078\084\065\032\069\078\081\085\065\078\084\079\032\079\032\083\084\065\084\085\083\032\069\083\084\073\086\069\082\032\083\085\066\073\078\068\079"
-end
-end)
-task.wait(POLL_SECONDS)
+local ok, err = pcall(poll)
+if not ok then info.Text = "\068\065\068\079\083\032\073\078\068\073\083\080\079\078\195\141\086\069\073\083\058\032" .. tostring(err) end
+task.wait(0.25)
 end
 end)
 end
